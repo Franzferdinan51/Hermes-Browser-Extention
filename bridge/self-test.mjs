@@ -210,13 +210,13 @@ async function main() {
   ok(body.includes('"kind":"metering"'), 'surfaces metering as CUSTOM metadata');
   ok(body.includes('"phase":"reasoning"'), 'surfaces reasoning lifecycle without raw reasoning');
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
-  ok(body.includes('No Hermes Browser companion is connected'), 'mirrorable browser tool fails fast with no companion');
+  ok(body.includes('"phase":"browser-unavailable"'), 'mirrorable browser tool reports missing companion without blocking');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 
   // Prompt contract.
   const sentMessage = String(lastChatStartPayload?.message || '');
-  ok(sentMessage.includes('[USER]\nsummarize this page'), 'Hermes prompt includes current user message');
+  ok(sentMessage.includes('[USER REQUEST]\nsummarize this page'), 'Hermes prompt includes current user message');
   ok(sentMessage.includes('[PAGE CONTEXT]') && sentMessage.includes('https://example.com'), 'Hermes prompt includes page context');
   ok(sentMessage.includes('browser_click(@eN)') && sentMessage.includes('browser_console()') && sentMessage.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
   ok(!sentMessage.includes('browser_hover(') && !sentMessage.includes('browser_wait('), 'prompt does not advertise extension-only helpers as Hermes tools');

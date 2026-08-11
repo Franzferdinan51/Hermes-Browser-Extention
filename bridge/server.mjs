@@ -143,6 +143,23 @@ function resolveToolResult(payload = {}) {
   return true;
 }
 
+function mirrorBrowserAction(toolCallId, tool, res, mirroredTools) {
+  if (!isBrowserCompanionTool(tool.name) || mirroredTools.has(toolCallId)) return;
+  let args;
+  try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
+  catch { return; } // streamed JSON is not complete yet
+  const action = normalizeBrowserTool(tool.name, args);
+  if (!action) return;
+  mirroredTools.add(toolCallId);
+  const requestId = uid('browser_');
+  const sent = wsSend({ kind: 'browser-action', requestId, toolCallId, action });
+  res.write(sse(custom('agent-status', {
+    phase: sent ? 'browser' : 'browser-unavailable',
+    label: sent ? `Mirroring ${tool.name} in active tab…` : 'Browser companion is not connected',
+    requestId, toolCallId, toolName: tool.name
+  })));
+}
+
 // ---------------------------------------------------------------------------
 // AG-UI event helpers
 // ---------------------------------------------------------------------------
@@ -241,6 +258,7 @@ async function runAgent(threadId, runId, input, res) {
     res.write(sse(textStart(messageId)));
     const toolAccum = new Map();
     const announcedTools = new Set();
+    const mirroredTools = new Set();
 
     for await (const { event, data, final } of readSSE(stream)) {
       if (final) break;
@@ -273,6 +291,7 @@ async function runAgent(threadId, runId, input, res) {
         if (typeof args === 'string') existing.args += args;
         else existing.args = args;
         toolAccum.set(tcid, existing);
+        mirrorBrowserAction(tcid, existing, res, mirroredTools);
 
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
@@ -297,53 +316,9 @@ async function runAgent(threadId, runId, input, res) {
       res.write(sse(toolEnd(tcid)));
     }
 
-    // Mirror only the Hermes core tools that map faithfully onto the active tab.
-    // browser_console/browser_vision remain Hermes-native and are still shown in
-    // the tool timeline; we do not fake an extension implementation for them.
-    const browserTools = [...toolAccum.entries()].filter(([, tool]) => isBrowserCompanionTool(tool.name));
-    for (const [tcid, tool] of browserTools) {
-      let action;
-      try {
-        const args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : tool.args;
-        action = normalizeBrowserTool(tool.name, args || {});
-      } catch (e) {
-        res.write(sse(custom('tool-result', {
-          toolCallId: tcid,
-          ok: false,
-          error: `Could not parse browser tool arguments: ${e.message}`
-        })));
-        continue;
-      }
-      if (!action) continue;
-
-      const requestId = uid('browser_');
-      const sent = wsSend({ kind: 'browser-action', requestId, toolCallId: tcid, action });
-      if (!sent) {
-        res.write(sse(custom('tool-result', {
-          requestId,
-          toolCallId: tcid,
-          ok: false,
-          error: 'No Hermes Browser companion is connected'
-        })));
-        continue;
-      }
-
-      res.write(sse(custom('agent-status', {
-        phase: 'browser',
-        label: `Mirroring ${tool.name} in active tab…`,
-        requestId,
-        toolCallId: tcid,
-        toolName: tool.name
-      })));
-      const reply = await waitToolResult(requestId);
-      res.write(sse(custom('tool-result', {
-        requestId,
-        toolCallId: tcid,
-        ok: reply.ok !== false,
-        ...(reply.ok === false ? { error: reply.error || 'browser action failed' } : reply)
-      })));
-    }
-
+    // Compatible browser actions are mirrored as soon as their arguments are
+    // complete inside the stream. Never wait here: Hermes may still be waiting
+    // on its own native tool result, and waiting would deadlock the SSE run.
     res.write(sse(custom('agent-status', { phase: 'done', label: 'Done' })));
     res.write(sse(runFinished(threadId, runId)));
   } catch (e) {
