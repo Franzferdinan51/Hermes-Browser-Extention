@@ -1,34 +1,27 @@
 /**
  * server.mjs — Hermes ⇄ AG-UI bridge.
  *
- * Exposes Hermes Agent as an AG-UI-compatible agent endpoint so a browser
- * extension (or any AG-UI client) can talk to it over the protocol.
- *
  * Endpoints:
- *   POST /agent                 AG-UI HTTP agent endpoint (Accept: text/event-stream)
- *   GET  /healthz               liveness + hermes reachability
- *   WS   /ws                    WebSocket control+event channel (extension subscribes,
- *                               and posts browser tool results back)
- *   POST /tool-result           alternative JSON channel for tool results
+ *   POST /agent          AG-UI SSE agent endpoint
+ *   GET  /healthz        bridge + Hermes reachability
+ *   GET  /v1/models      configured Hermes model inventory
+ *   GET  /v1/runtime     read-only Hermes toolset + skill inventory
+ *   WS   /ws             correlated active-tab browser action channel
+ *   POST /tool-result    alternate browser-result channel
  *
- * Browser tool-call handoff:
- *   - When Hermes emits a browser_* tool call, the bridge mirrors it to the
- *     extension with a correlated requestId, waits for that exact result, and
- *     surfaces the result through AG-UI without confusing concurrent calls.
- *
- * Usage:  node server.mjs
- * Env:    PORT, HERMES_URL, HERMES_PASSWORD, MODEL, MODEL_PROVIDER, WORKSPACE
+ * Security:
+ *   - binds only to 127.0.0.1
+ *   - accepts browser-origin requests only from extension origins
+ *   - optional BRIDGE_AUTH_TOKEN protects HTTP + WebSocket routes
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { HermesClient, readSSE } from './hermes.mjs';
 
-// ---- Env bootstrap: auto-load ~/.hermes/.hermes-webui.env so the bridge can
-// reach Hermes without the user copying secrets. The password is read but never
-// echoed to the console. ----
 function loadEnvFile(file) {
   try {
     if (!fs.existsSync(file)) return;
@@ -36,8 +29,11 @@ function loadEnvFile(file) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
       if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
     }
-  } catch (e) { console.warn('[hermes-bridge] could not load ' + file + ': ' + e.message); }
+  } catch (e) {
+    console.warn('[hermes-bridge] could not load ' + file + ': ' + e.message);
+  }
 }
+
 const HERMES_HOME = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
 loadEnvFile(path.join(HERMES_HOME, '.hermes-webui.env'));
 
@@ -47,7 +43,8 @@ const cfg = {
   password: process.env.HERMES_PASSWORD || process.env.HERMES_WEBUI_PASSWORD || '',
   model: process.env.MODEL || 'qwen3.5-9b',
   modelProvider: process.env.MODEL_PROVIDER || 'lmstudio',
-  workspace: process.env.WORKSPACE || ''
+  workspace: process.env.WORKSPACE || '',
+  authToken: process.env.BRIDGE_AUTH_TOKEN || ''
 };
 
 const hermes = new HermesClient({
@@ -59,18 +56,64 @@ const hermes = new HermesClient({
 });
 const hermesSessions = new Map();
 
-// ----------------------------------------------------------------------
-// WebSocket channel to the extension (browser tool-call handoff)
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Request security
+// ---------------------------------------------------------------------------
+function isAllowedOrigin(origin = '') {
+  if (!origin) return true; // curl/node/native clients do not send Origin.
+  return /^chrome-extension:\/\/[a-p]{32}$/i.test(origin)
+    || /^moz-extension:\/\/[a-z0-9-]+$/i.test(origin);
+}
+
+function tokenFromRequest(req) {
+  const auth = String(req.headers.authorization || '');
+  const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';
+  if (bearer) return bearer;
+  try {
+    return new URL(req.url || '/', 'http://127.0.0.1').searchParams.get('token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function sameToken(actual, expected) {
+  const a = Buffer.from(String(actual || ''), 'utf8');
+  const b = Buffer.from(String(expected || ''), 'utf8');
+  if (a.length !== b.length || !a.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function isAuthorized(req) {
+  return !cfg.authToken || sameToken(tokenFromRequest(req), cfg.authToken);
+}
+
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || '');
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function json(res, status, value) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(value));
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket channel to the extension
+// ---------------------------------------------------------------------------
 const wsClients = new Set();
 const pendingToolResults = new Map();
 
 function wsSend(obj) {
   let sent = 0;
-  for (const c of wsClients) {
+  for (const client of wsClients) {
     try {
-      if (c.readyState === 1) {
-        c.send(JSON.stringify(obj));
+      if (client.readyState === 1) {
+        client.send(JSON.stringify(obj));
         sent++;
       }
     } catch {}
@@ -90,7 +133,6 @@ function waitToolResult(requestId, timeoutMs = 120_000) {
 
 function resolveToolResult(payload = {}) {
   let requestId = payload.requestId || payload.request_id || '';
-  // Backward compatibility with older extension builds that did not echo an id.
   if (!requestId && pendingToolResults.size === 1) requestId = pendingToolResults.keys().next().value;
   if (!requestId) return false;
   const pending = pendingToolResults.get(requestId);
@@ -101,9 +143,9 @@ function resolveToolResult(payload = {}) {
   return true;
 }
 
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // AG-UI event helpers
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 function sse(frame) { return `data: ${JSON.stringify(frame)}\n\n`; }
 function runStarted(threadId, runId) { return { type: 'RUN_STARTED', threadId, runId, timestamp: Date.now() }; }
 function runFinished(threadId, runId) { return { type: 'RUN_FINISHED', threadId, runId, timestamp: Date.now() }; }
@@ -117,72 +159,102 @@ function toolEnd(toolCallId) { return { type: 'TOOL_CALL_END', toolCallId, times
 function messagesSnapshot(messages) { return { type: 'MESSAGES_SNAPSHOT', messages, timestamp: Date.now() }; }
 function stateSnapshot(state) { return { type: 'STATE_SNAPSHOT', state, timestamp: Date.now() }; }
 function custom(kind, data = {}) { return { type: 'CUSTOM', kind, ...data, timestamp: Date.now() }; }
+function uid(prefix) { return prefix + Math.random().toString(36).slice(2); }
 
-function uid(p) { return p + Math.random().toString(36).slice(2); }
+// ---------------------------------------------------------------------------
+// Hermes browser-tool bridge
+// ---------------------------------------------------------------------------
+const MIRRORABLE_BROWSER_TOOLS = new Set([
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_type',
+  'browser_scroll',
+  'browser_back',
+  'browser_press',
+  'browser_get_images'
+]);
 
-// ----------------------------------------------------------------------
-// Browser tool detection + extraction of resolved args
-// ----------------------------------------------------------------------
 function isBrowserCompanionTool(name = '') {
-  const n = String(name).trim().toLowerCase();
-  // Do not catch generic web_search/web_fetch tools. The browser companion only
-  // mirrors tools that explicitly target a browser/page/DOM surface.
-  return /^(browser|page|dom)(?:[_:.-]|$)/.test(n);
+  return MIRRORABLE_BROWSER_TOOLS.has(String(name || '').trim().toLowerCase());
+}
+
+function normalizeBrowserTool(name, args = {}) {
+  const n = String(name || '').toLowerCase();
+  const selector = args.selector || args.element || args.ref || args.target;
+  switch (n) {
+    case 'browser_navigate':
+      return { name: 'navigate', params: { url: args.url || args.href } };
+    case 'browser_snapshot':
+      return { name: 'snapshot', params: {} };
+    case 'browser_click':
+      return { name: 'click', params: { selector } };
+    case 'browser_type':
+      return { name: 'set_value', params: { selector, value: args.text ?? args.value ?? '' } };
+    case 'browser_scroll':
+      return { name: 'scroll', params: { direction: args.direction, amount: args.amount, selector, y: args.y } };
+    case 'browser_back':
+      return { name: 'back', params: {} };
+    case 'browser_press':
+      return { name: 'key', params: { keys: args.key ?? args.keys ?? args.text } };
+    case 'browser_get_images':
+      return { name: 'get_images', params: { limit: args.limit } };
+    default:
+      return null;
+  }
 }
 
 async function runAgent(threadId, runId, input, res) {
-  res.writeHead(200, {
+  const origin = String(res.req?.headers?.origin || '');
+  const headers = {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': '*'
-  });
+    'X-Accel-Buffering': 'no'
+  };
+  if (origin && isAllowedOrigin(origin)) headers['Access-Control-Allow-Origin'] = origin;
+  res.writeHead(200, headers);
 
   res.write(sse(runStarted(threadId, runId)));
   res.write(sse(custom('agent-status', { phase: 'thinking', label: 'Thinking…' })));
 
-  // Emit a messages snapshot of what we sent.
   const roleMessages = (input.messages || []).map((m) => ({
-    id: m.id || uid('msg_'), role: m.role || 'user', content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    id: m.id || uid('msg_'),
+    role: m.role || 'user',
+    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
   }));
   res.write(sse(messagesSnapshot(roleMessages)));
   if (input.state) res.write(sse(stateSnapshot(input.state)));
 
-  // Build a single user message for Hermes from the RunAgentInput.
   const userText = buildHermesPrompt(input);
   const messageId = uid('asst_');
 
   try {
     const { stream, sessionId } = await hermes.chatStream(userText, {
-      model: input.model, modelProvider: input.modelProvider, workspace: input.workspace,
+      model: input.model,
+      modelProvider: input.modelProvider,
+      workspace: input.workspace,
       sessionId: hermesSessions.get(threadId) || undefined
     });
     if (threadId && sessionId) hermesSessions.set(threadId, sessionId);
 
     res.write(sse(textStart(messageId)));
-
-    const toolAccum = new Map(); // toolCallId -> {name, args}
+    const toolAccum = new Map();
     const announcedTools = new Set();
 
     for await (const { event, data, final } of readSSE(stream)) {
       if (final) break;
       if (!data) continue;
 
-      // ---- assistant text ----
       if (event === 'token' && typeof data.text === 'string') {
         res.write(sse(textDelta(messageId, data.text)));
         continue;
       }
-
-      // Never expose raw hidden reasoning. The UI gets only a lifecycle signal.
       if (event === 'reasoning') {
+        // Never expose raw hidden reasoning; expose lifecycle only.
         res.write(sse(custom('agent-status', { phase: 'reasoning', label: 'Reasoning…' })));
         continue;
       }
-
-      // Preserve Hermes runtime metadata for richer UI without forcing clients
-      // to know Hermes' private SSE event names.
       if (event === 'metering') {
         res.write(sse(custom('metering', { data })));
         continue;
@@ -192,17 +264,16 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
 
-      // ---- tool call detection ----
       if (event === 'tool_call' || data.type === 'tool_call' || (data.name && data.args !== undefined)) {
         const tcid = data.tool_call_id || data.id || uid('tool_');
         const name = data.name || data.tool_name || toolAccum.get(tcid)?.name || '';
         const args = data.args ?? data.arguments ?? {};
         const existing = toolAccum.get(tcid) || { name, args: '' };
         if (name) existing.name = name;
-        // Hermes may stream JSON argument chunks or send a resolved object.
         if (typeof args === 'string') existing.args += args;
         else existing.args = args;
         toolAccum.set(tcid, existing);
+
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
           res.write(sse(custom('agent-status', {
@@ -215,30 +286,32 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
 
-      // ---- done / complete ----
       if (event === 'done' || event === 'complete' || data.done) break;
     }
 
     res.write(sse(textEnd(messageId)));
 
-    // Emit finalized tool calls after the assistant message so AG-UI clients
-    // retain deterministic message/tool ordering while still receiving live
-    // CUSTOM status signals above.
-    for (const [tcid, t] of toolAccum) {
-      res.write(sse(toolStart(tcid, t.name)));
-      res.write(sse(toolDelta(tcid, t.args)));
+    for (const [tcid, tool] of toolAccum) {
+      res.write(sse(toolStart(tcid, tool.name)));
+      res.write(sse(toolDelta(tcid, tool.args)));
       res.write(sse(toolEnd(tcid)));
     }
 
-    // Mirror browser-specific Hermes tools into the active browser extension.
-    const browserTools = [...toolAccum.entries()].filter(([, t]) => isBrowserCompanionTool(t.name));
-    for (const [tcid, t] of browserTools) {
-      let action = null;
+    // Mirror only the Hermes core tools that map faithfully onto the active tab.
+    // browser_console/browser_vision remain Hermes-native and are still shown in
+    // the tool timeline; we do not fake an extension implementation for them.
+    const browserTools = [...toolAccum.entries()].filter(([, tool]) => isBrowserCompanionTool(tool.name));
+    for (const [tcid, tool] of browserTools) {
+      let action;
       try {
-        const args = typeof t.args === 'string' ? JSON.parse(t.args || '{}') : t.args;
-        action = normalizeBrowserTool(t.name, args || {});
+        const args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : tool.args;
+        action = normalizeBrowserTool(tool.name, args || {});
       } catch (e) {
-        res.write(sse(custom('tool-result', { toolCallId: tcid, ok: false, error: `Could not parse browser tool arguments: ${e.message}` })));
+        res.write(sse(custom('tool-result', {
+          toolCallId: tcid,
+          ok: false,
+          error: `Could not parse browser tool arguments: ${e.message}`
+        })));
         continue;
       }
       if (!action) continue;
@@ -257,17 +330,18 @@ async function runAgent(threadId, runId, input, res) {
 
       res.write(sse(custom('agent-status', {
         phase: 'browser',
-        label: `Acting in browser: ${action.name}…`,
+        label: `Mirroring ${tool.name} in active tab…`,
         requestId,
         toolCallId: tcid,
-        toolName: t.name
+        toolName: tool.name
       })));
       const reply = await waitToolResult(requestId);
-      if (reply.ok) {
-        res.write(sse(custom('tool-result', { requestId, toolCallId: tcid, ...reply })));
-      } else {
-        res.write(sse(custom('tool-result', { requestId, toolCallId: tcid, ok: false, error: reply.error || 'browser action failed' })));
-      }
+      res.write(sse(custom('tool-result', {
+        requestId,
+        toolCallId: tcid,
+        ok: reply.ok !== false,
+        ...(reply.ok === false ? { error: reply.error || 'browser action failed' } : reply)
+      })));
     }
 
     res.write(sse(custom('agent-status', { phase: 'done', label: 'Done' })));
@@ -279,199 +353,199 @@ async function runAgent(threadId, runId, input, res) {
   }
 }
 
-/** Convert a Hermes tool name + args into a page-actor action for the extension. */
-function normalizeBrowserTool(name, args = {}) {
-  const n = String(name || '').toLowerCase();
-  const selector = args.selector || args.element || args.ref || args.target;
-
-  if (/get[_-]?images|images/.test(n)) return { name: 'get_images', params: { limit: args.limit } };
-  if (/snapshot|accessibility/.test(n)) return { name: 'snapshot', params: {} };
-  if (/grep|search/.test(n)) return { name: 'grep', params: { pattern: args.pattern || args.query || args.text, over: args.over, limit: args.limit } };
-  if (/read|extract|get[_-]?text/.test(n)) return { name: 'read', params: { selector, prop: args.prop } };
-  if (/navigate|goto|open/.test(n)) return { name: 'navigate', params: { url: args.url || args.href } };
-  if (/\bback\b/.test(n)) return { name: 'back', params: {} };
-  if (/forward/.test(n)) return { name: 'forward', params: {} };
-  if (/reload|refresh/.test(n)) return { name: 'reload', params: {} };
-  if (/click/.test(n)) return { name: 'click', params: { selector } };
-  if (/hover/.test(n)) return { name: 'hover', params: { selector } };
-  if (/select/.test(n)) return { name: 'select_option', params: { selector, value: args.value ?? args.option ?? args.text } };
-  if (/press|key/.test(n)) return { name: 'key', params: { keys: args.key ?? args.keys ?? args.text } };
-  if (/fill|input|type|set/.test(n)) return { name: 'set_value', params: { selector, value: args.value ?? args.text ?? args.type } };
-  if (/scroll/.test(n)) return { name: 'scroll', params: { direction: args.direction, amount: args.amount, selector, y: args.y } };
-  if (/wait/.test(n)) return { name: 'wait', params: { ms: args.ms ?? args.timeout, selector: args.selector, text: args.text } };
-  return null;
-}
-
-/** Build a single prompt for Hermes from an AG-UI RunAgentInput. */
+/** Build the Hermes turn with page context + role-preserving conversation. */
 function buildHermesPrompt(input) {
   const parts = [];
 
-  // Enumerate context forks (page snapshots etc.)
-  if (input.context && input.context.length) {
-    for (const ctx of input.context) {
-      if (ctx.type === 'page_context' || ctx.document) {
-        parts.push(
-          `[PAGE CONTEXT]\nURL: ${ctx.url || ''}\nTITLE: ${ctx.title || ''}\n\n${ctx.document}\n` +
-          (ctx.accessibility ? `\n[ACCESSIBILITY SNAPSHOT]\n${ctx.accessibility}\n` : '') +
-          (ctx.interactive ? `\n[INTERACTIVE ELEMENTS]\n${ctx.interactive.map((i) => `- ${i.ref || ''} ${i.selector || ''} (${i.tag}) ${i.text || i.value || i.placeholder || ''}`).join('\n')}\n` : '')
-        );
-      } else {
-        parts.push(`[CONTEXT ${ctx.type || 'context'}]\n${JSON.stringify(ctx)}`);
-      }
+  for (const ctx of input.context || []) {
+    if (ctx.type === 'page_context' || ctx.document) {
+      parts.push(
+        `[PAGE CONTEXT]\nURL: ${ctx.url || ''}\nTITLE: ${ctx.title || ''}\n\n${ctx.document || ''}` +
+        (ctx.accessibility ? `\n\n[ACCESSIBILITY SNAPSHOT]\n${ctx.accessibility}` : '') +
+        (ctx.interactive?.length
+          ? `\n\n[INTERACTIVE ELEMENTS]\n${ctx.interactive.map((i) => `- ${i.ref || ''} ${i.selector || ''} (${i.tag || ''}) ${i.text || i.value || i.placeholder || ''}`).join('\n')}`
+          : '')
+      );
+    } else {
+      parts.push(`[CONTEXT ${ctx.type || 'context'}]\n${JSON.stringify(ctx)}`);
     }
   }
 
-  // Preserve conversation roles. The current user turn MUST be included here;
-  // omitting it made Hermes receive page context + tool instructions without
-  // the actual request.
-  for (const m of input.messages || []) {
-    const role = String(m.role || 'user').toLowerCase();
-    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+  for (const message of input.messages || []) {
+    const role = String(message.role || 'user').toLowerCase();
+    const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
     if (role === 'tool') parts.push(`[TOOL RESULT]\n${content}`);
     else if (role === 'assistant') parts.push(`[ASSISTANT]\n${content}`);
     else if (role === 'system') parts.push(`[SYSTEM]\n${content}`);
     else parts.push(`[USER]\n${content}`);
   }
 
+  // Keep this list aligned with Hermes' current core browser tool reference.
+  // These are Hermes-native capabilities, not invented extension-only tools.
   const tools = [
     'browser_navigate(url)',
-    'browser_snapshot()',
-    'browser_read(selector?)',
-    'browser_grep(pattern)',
-    'browser_click(element/ref/selector)',
-    'browser_type(element/ref/selector,text)',
-    'browser_scroll(direction,amount)',
+    'browser_snapshot(full?)',
+    'browser_click(@eN)',
+    'browser_type(@eN, text)',
+    'browser_scroll(direction, amount?)',
     'browser_back()',
-    'browser_forward()',
-    'browser_reload()',
     'browser_press(key)',
-    'browser_hover(element/ref/selector)',
-    'browser_select_option(element/ref/selector,value)',
-    'browser_wait(ms or selector/text)',
-    'browser_get_images()'
+    'browser_get_images()',
+    'browser_console()',
+    'browser_vision()'
   ];
   parts.push(
-    `[BROWSER CAPABILITIES]\n${tools.join('\n')}\n\n` +
-    'These are real Hermes browser tools available in this session. Prefer accessibility refs such as @e1 when supplied. ' +
-    'Use the smallest number of tool calls that safely completes the task, reuse the current page instead of reopening it, wait for content when needed, and continue with a concise user-facing answer after tool work. ' +
-    'Do not claim browser tools are unavailable and do not print fake JSON tool calls as prose.'
+    `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
+    'When the browser toolset is available, use Hermes accessibility refs such as @e1 from browser_snapshot. ' +
+    'Prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ' +
+    'Do not print fake JSON tool calls as prose. The browser companion may mirror compatible browser actions into the user\'s active tab, but Hermes remains the source of truth for tool execution.'
   );
 
   return parts.join('\n\n').trim();
 }
 
-// ----------------------------------------------------------------------
-// HTTP server
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Hermes model/runtime proxy helpers
+// ---------------------------------------------------------------------------
+async function modelInventory() {
+  let providerData = null;
+  try { providerData = await hermes.requestJson('/api/providers'); } catch {}
+  let catalogData = {};
+  try { catalogData = await hermes.requestJson('/api/models'); } catch {}
+  if (!providerData) providerData = catalogData;
+
+  const out = [];
+  if (Array.isArray(providerData?.providers)) {
+    for (const group of providerData.providers) {
+      const configured = group.has_key === true && !group.auth_error;
+      const active = group.id === cfg.modelProvider || group.id === providerData.active_provider;
+      if (!configured && !active) continue;
+      for (const item of group.models || []) {
+        const id = typeof item === 'string' ? item : item.id;
+        if (!id) continue;
+        out.push({
+          id: group.id === 'moa' ? id : `@${group.id}:${id}`,
+          label: typeof item === 'string' ? item : (item.label || id),
+          provider: group.id,
+          providerLabel: group.display_name || group.id,
+          ...(typeof item === 'object' && item ? item : {})
+        });
+      }
+    }
+  } else {
+    const activeProvider = providerData?.active_provider || cfg.modelProvider;
+    for (const group of providerData?.groups || []) {
+      const provider = group.provider_id || '';
+      if (provider !== activeProvider) continue;
+      for (const item of group.models || []) {
+        if (!item?.id) continue;
+        out.push({
+          ...item,
+          id: item.id,
+          label: item.label || item.id,
+          provider,
+          providerLabel: group.provider || provider
+        });
+      }
+    }
+  }
+
+  return {
+    object: 'list',
+    active_provider: catalogData?.active_provider || providerData?.active_provider,
+    default_model: catalogData?.default_model || providerData?.default_model,
+    data: out
+  };
+}
+
+// ---------------------------------------------------------------------------
+// HTTP + WebSocket server
+// ---------------------------------------------------------------------------
 const server = http.createServer(async (req, res) => {
+  const origin = String(req.headers.origin || '');
+  if (!isAllowedOrigin(origin)) {
+    json(res, 403, { error: 'origin_not_allowed' });
+    return;
+  }
+  applyCors(req, res);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (!isAuthorized(req)) {
+    json(res, 401, { error: 'unauthorized' });
+    return;
+  }
+
   const route = (req.url || '').split('?')[0];
 
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
-
   if (req.method === 'GET' && route === '/v1/models') {
-    // Auto-login, fetch from Hermes, then flatten.
     try {
-      const loginRes = await fetch(`${cfg.hermesUrl}/api/auth/login`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: cfg.password })
-      });
-      const sc = loginRes.headers.get('set-cookie') || '';
-      const m = sc.match(/(?:^|,\s*)(?:[^;]+;\s*)?hermes_session(?:_at)?=([^;]+)/);
-      if (!m) throw new Error('login cookie missing');
-      const cookie = `hermes_session=${m[1]}`;
-      let r = await fetch(`${cfg.hermesUrl}/api/providers`, { headers: { Cookie: cookie } });
-      let providerData = r.ok ? await r.json().catch(() => ({})) : null;
-      if (!providerData || !Array.isArray(providerData.providers)) {
-        r = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
-        providerData = await r.json().catch(() => ({}));
-      }
-      const catalogRes = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
-      const catalogData = catalogRes.ok ? await catalogRes.json().catch(() => ({})) : {};
-      const out = [];
-      if (Array.isArray(providerData.providers)) {
-        // /api/providers is the authoritative authenticated inventory. It
-        // includes configured API-key/OAuth providers and excludes catalog-only
-        // providers whose credentials are absent.
-        for (const g of providerData.providers) {
-          const configured = g.has_key === true && !g.auth_error;
-          const isActiveMoA = g.id === cfg.modelProvider || g.id === providerData.active_provider;
-          if (!configured && !isActiveMoA) continue;
-          for (const item of g.models || []) {
-            const id = typeof item === 'string' ? item : item.id;
-            if (id) out.push({ id: g.id === 'moa' ? id : `@${g.id}:${id}`, label: typeof item === 'string' ? item : (item.label || id), provider: g.id, providerLabel: g.display_name || g.id });
-          }
-        }
-        const active = catalogData.active_provider;
-        if (active === 'moa' && !out.some((item) => item.provider === 'moa')) {
-          const group = (catalogData.groups || []).find((item) => item.provider_id === 'moa');
-          for (const item of (group?.models || [])) out.push({ id: item.id, label: item.label || item.id, provider: 'moa', providerLabel: group.provider || 'Mixture of Agents' });
-        }
-      } else {
-        // Legacy fallback for older Hermes builds.
-        const active = providerData.active_provider || cfg.modelProvider;
-        for (const g of (providerData.groups || [])) {
-          const pid = g.provider_id || '';
-          if (pid !== active) continue;
-          for (const item of g.models || []) out.push({ id: item.id, label: item.label || item.id, provider: pid, providerLabel: g.provider || pid });
-        }
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        object: 'list',
-        active_provider: catalogData.active_provider || providerData.active_provider,
-        default_model: catalogData.default_model || providerData.default_model,
-        data: out
-      }));
+      json(res, 200, await modelInventory());
     } catch (e) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ object: 'list', error: e.message, data: [] }));
+      json(res, 200, { object: 'list', error: e.message, data: [] });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && route === '/v1/runtime') {
+    try {
+      const runtime = await hermes.runtimeOverview();
+      json(res, 200, {
+        object: 'hermes.runtime',
+        hermes: cfg.hermesUrl,
+        ...runtime
+      });
+    } catch (e) {
+      json(res, 502, { object: 'hermes.runtime', error: e.message, toolsets: [], skills: [] });
     }
     return;
   }
 
   if (req.method === 'GET' && route === '/healthz') {
-    let hermesOk = false; let hermesInfo = '';
+    let hermesOk = false;
+    let hermesInfo = '';
     try {
-      const r = await fetch(`${cfg.hermesUrl}/api/auth/login`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: cfg.password })
-      });
-      hermesOk = r.ok; hermesInfo = `HTTP ${r.status}`;
-    } catch (e) { hermesInfo = e.message; }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+      await hermes.requestJson('/api/models');
+      hermesOk = true;
+      hermesInfo = 'authenticated';
+    } catch (e) {
+      hermesInfo = e.message;
+    }
+    json(res, 200, {
       ok: true,
       hermes: cfg.hermesUrl,
       hermesOk,
       hermesInfo,
       wsClients: wsClients.size,
       pendingBrowserActions: pendingToolResults.size,
-      version: '0.2.0'
-    }));
+      authRequired: Boolean(cfg.authToken),
+      version: '0.3.0'
+    });
     return;
   }
 
   if (req.method === 'POST' && route === '/tool-result') {
     let body = '';
-    for await (const c of req) body += c;
-    let payload; try { payload = JSON.parse(body); } catch { payload = {}; }
+    for await (const chunk of req) body += chunk;
+    let payload;
+    try { payload = JSON.parse(body); } catch { payload = {}; }
     const matched = resolveToolResult({ kind: 'browser-result', ...payload });
-    res.writeHead(matched ? 200 : 404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: matched }));
+    json(res, matched ? 200 : 404, { ok: matched });
     return;
   }
 
   if (req.method === 'POST' && route === '/agent') {
     let body = '';
-    for await (const c of req) body += c;
+    for await (const chunk of req) body += chunk;
     let input;
-    try { input = JSON.parse(body); } catch (e) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'Invalid JSON: ' + e.message } }));
+    try {
+      input = JSON.parse(body);
+    } catch (e) {
+      json(res, 400, { error: { message: 'Invalid JSON: ' + e.message } });
       return;
     }
     const threadId = input.threadId || uid('thread_');
@@ -480,17 +554,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not found' }));
+  json(res, 404, { error: 'not_found' });
 });
 
-// WS upgrade
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  verifyClient: ({ req, origin }) => isAllowedOrigin(origin || req.headers.origin || '') && isAuthorized(req)
+});
+
 wss.on('connection', (ws) => {
   wsClients.add(ws);
   ws.send(JSON.stringify({ kind: 'hello', message: `Connected to Hermes bridge on :${PORT}` }));
   ws.on('message', (raw) => {
-    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.kind === 'browser-result') resolveToolResult(msg);
   });
   ws.on('close', () => wsClients.delete(ws));
@@ -498,9 +576,11 @@ wss.on('connection', (ws) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[hermes-bridge] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[hermes-bridge] AG-UI endpoint : POST /agent (Accept: text/event-stream)`);
+  console.log(`[hermes-bridge] AG-UI endpoint : POST /agent`);
+  console.log(`[hermes-bridge] runtime         : GET /v1/runtime`);
   console.log(`[hermes-bridge] WS              : ws://127.0.0.1:${PORT}/ws`);
   console.log(`[hermes-bridge] hermes          : ${cfg.hermesUrl}`);
   console.log(`[hermes-bridge] model           : ${cfg.model} (${cfg.modelProvider})`);
-  if (!cfg.password) console.warn('[hermes-bridge] WARNING: HERMES_PASSWORD not set — set it or Hermes login will fail.');
+  console.log(`[hermes-bridge] auth            : ${cfg.authToken ? 'token required' : 'local-only / no bridge token'}`);
+  if (!cfg.password) console.warn('[hermes-bridge] WARNING: HERMES_PASSWORD not set — Hermes login will fail.');
 });
