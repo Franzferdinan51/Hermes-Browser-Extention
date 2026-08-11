@@ -56,7 +56,8 @@ export class HermesClient extends EventEmitter {
       body: JSON.stringify({
         workspace: this.workspace || undefined,
         model: this.model,
-        model_provider: this.modelProvider
+        model_provider: this.modelProvider,
+        enabled_toolsets: ['hermes-cli', 'browser']
       })
     });
     if (!r.ok) {

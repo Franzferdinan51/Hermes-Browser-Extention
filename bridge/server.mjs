@@ -257,13 +257,12 @@ function buildHermesPrompt(input) {
     else if (role === 'assistant') parts.push(`[ASSISTANT]\n${content}`);
   }
 
-  // The tools Hermes can use — always include browser tools.
   const tools = [
-    'browser_read_page', 'browser_click(selector)', 'browser_fill(selector,value)',
-    'browser_type(selector,text)', 'browser_scroll(direction,amount)', 'browser_extract(selector,prop)',
-    'browser_grep(pattern,over,limit)', 'browser_navigate(url)'
+    'browser_navigate(url)', 'browser_snapshot()', 'browser_click(element or selector)',
+    'browser_type(element or selector,text)', 'browser_scroll(direction,amount)',
+    'browser_back()', 'browser_press(key)', 'browser_get_images()'
   ];
-  parts.push(`[AVAILABLE BROWSER TOOLS]\n${tools.join('\n')}\n\nUse these tools to read and control the page the user is viewing. Prefer them over guessing. When a tool call is needed, emit it in the stream with name + JSON args.`);
+  parts.push(`[BROWSER CAPABILITIES]\n${tools.join('\n')}\n\nThese are real Hermes tools available in this session. Call them when browser interaction is needed; do not explain that they are unavailable and do not emit fake JSON tool calls.`);
 
   return parts.join('\n\n').trim();
 }
