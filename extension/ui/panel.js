@@ -101,6 +101,15 @@ function queueText(delta) {
   }, THROTTLE);
 }
 
+let lastRenderedError = '';
+function showError(text) {
+  const normalized = String(text || 'unknown').replace(/^Error:\s*/i, '');
+  if (normalized === lastRenderedError) return;
+  lastRenderedError = normalized;
+  addEl('err', 'Error: ' + normalized);
+  setTimeout(() => { if (lastRenderedError === normalized) lastRenderedError = ''; }, 1500);
+}
+
 function handleEvent(e) {
   const t = e.type;
   switch (t) {
@@ -151,7 +160,7 @@ function handleEvent(e) {
       flushText();
       finalizeStream();
       if (currentTool) finalizeTool(false, e.error || e.message);
-      addEl('err', 'Error: ' + (e.error || e.message || 'unknown'));
+      showError(e.error || e.message || 'unknown');
       setStatus('err');
       $('runInfo').textContent = 'error';
       break;
@@ -181,8 +190,8 @@ function connectPort() {
     if (m.kind === 'event' && m.event) handleEvent(m.event);
     else if (m.kind === 'state') {
       setStatus(m.clientBusy ? 'busy' : 'ok');
-    } else if (m.kind === 'run-start') { busy = true; addEl('user', m.text); }
-    else if (m.kind === 'run-end') { busy = false; if (!m.ok) addEl('err', 'Error: ' + (m.error || 'unknown')); }
+    } else if (m.kind === 'run-start') { busy = true; }
+    else if (m.kind === 'run-end') { busy = false; }
     else if (m.kind === 'page-snapshot' && m.snapshot) updatePageBar(m.snapshot);
   });
   port.onDisconnect.addListener(() => { port = null; });
@@ -260,9 +269,10 @@ async function send() {
   setStatus('busy');
   $('runInfo').textContent = 'running…';
   try {
-    await chrome.runtime.sendMessage({ kind: 'chat', text, attachPage: $('autoSnap').checked });
+    const response = await chrome.runtime.sendMessage({ kind: 'chat', text, attachPage: $('autoSnap').checked });
+    if (response && !response.ok) throw new Error(response.error || 'Chat request failed');
   } catch (e) {
-    addEl('err', 'Error: ' + String(e));
+    showError(e);
     setStatus('err');
     $('runInfo').textContent = 'error';
   }

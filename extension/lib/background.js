@@ -175,6 +175,7 @@ async function chat(userText, opts = {}) {
         url: snapshot.url,
         title: snapshot.title,
         document: dom.slice(0, cfg.maxDomChars),
+        accessibility: snapshot.snapshot.accessibility || '',
         interactive,
         time: Date.now()
       };

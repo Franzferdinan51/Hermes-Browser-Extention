@@ -84,11 +84,15 @@ export class HermesClient extends EventEmitter {
     if (!sessionId) sessionId = await this._ensureSession();
     this._sessionId = sessionId;
 
+    const modelProvider = extra.modelProvider || this.modelProvider;
+    let model = extra.model || this.model;
+    const qualified = String(model).match(/^@([^:]+):(.+)$/);
+    if (qualified && (!modelProvider || qualified[1] === modelProvider)) model = qualified[2];
     const body = {
       session_id: sessionId,
       message,
-      model: extra.model || this.model,
-      model_provider: extra.modelProvider || this.modelProvider,
+      model,
+      model_provider: modelProvider,
       workspace: extra.workspace || this.workspace || undefined
     };
     const start = await fetch(`${this.baseUrl}/api/chat/start`, {
@@ -98,6 +102,25 @@ export class HermesClient extends EventEmitter {
     });
     if (!start.ok) {
       const t = await start.text().catch(() => '');
+      if (start.status === 404 && /session\s+not\s+found/i.test(t)) {
+        this._sessionId = null;
+        sessionId = await this._ensureSession();
+        body.session_id = sessionId;
+        const retry = await fetch(`${this.baseUrl}/api/chat/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: cookie },
+          body: JSON.stringify(body)
+        });
+        if (retry.ok) {
+          const retryJson = await retry.json().catch(() => ({}));
+          if (!retryJson.stream_id) throw new Error('Hermes chat/start returned no stream_id');
+          const retryRes = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(retryJson.stream_id)}`, {
+            headers: { Cookie: cookie, Accept: 'text/event-stream' }
+          });
+          if (!retryRes.ok || !retryRes.body) throw new Error(`Hermes chat/stream: HTTP ${retryRes.status}`);
+          return { stream: retryRes.body, sessionId, stream_id: retryJson.stream_id };
+        }
+      }
       throw new Error(`Hermes chat/start: HTTP ${start.status} ${t.slice(0, 200)}`);
     }
     const j = await start.json().catch(() => ({}));

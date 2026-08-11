@@ -58,6 +58,7 @@ const hermes = new HermesClient({
   modelProvider: cfg.modelProvider,
   workspace: cfg.workspace
 });
+const hermesSessions = new Map();
 
 // ----------------------------------------------------------------------
 // WebSocket channel to the extension (browser tool-call handoff)
@@ -131,10 +132,11 @@ async function runAgent(threadId, runId, input, res) {
   const messageId = uid('asst_');
 
   try {
-    const { stream } = await hermes.chatStream(userText, {
+    const { stream, sessionId } = await hermes.chatStream(userText, {
       model: input.model, modelProvider: input.modelProvider, workspace: input.workspace,
-      sessionId: threadId || undefined
+      sessionId: hermesSessions.get(threadId) || undefined
     });
+    if (threadId && sessionId) hermesSessions.set(threadId, sessionId);
 
     res.write(sse(textStart(messageId)));
 
@@ -289,14 +291,29 @@ const server = http.createServer(async (req, res) => {
       const m = sc.match(/(?:^|,\s*)(?:[^;]+;\s*)?hermes_session(?:_at)?=([^;]+)/);
       if (!m) throw new Error('login cookie missing');
       const cookie = `hermes_session=${m[1]}`;
-      const r = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
-      const data = await r.json().catch(() => ({}));
-      // Flatten the groups into a simple {id,label,provider}[] for the extension.
+      let r = await fetch(`${cfg.hermesUrl}/api/model/options?explicit_only=true&include_unconfigured=false`, { headers: { Cookie: cookie } });
+      let data = r.ok ? await r.json().catch(() => ({})) : null;
+      if (!data) {
+        r = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
+        data = await r.json().catch(() => ({}));
+      }
       const out = [];
-      for (const g of (data.groups || [])) {
-        const pid = g.provider_id || '';
-        for (const m of g.models || []) {
-          out.push({ id: m.id, label: m.label || m.id, provider: pid, providerLabel: g.provider || pid });
+      if (Array.isArray(data.providers)) {
+        for (const g of data.providers) {
+          const pid = g.slug || g.provider_id || '';
+          for (const item of g.models || []) {
+            const id = typeof item === 'string' ? item : item.id;
+            if (id) out.push({ id, label: typeof item === 'string' ? item : (item.label || id), provider: pid, providerLabel: g.name || g.provider || pid });
+          }
+        }
+      } else {
+        // Legacy /api/models has no configured/authenticated flags. Only show
+        // the active provider rather than advertising the entire catalog.
+        const active = data.active_provider || cfg.modelProvider;
+        for (const g of (data.groups || [])) {
+          const pid = g.provider_id || '';
+          if (pid !== active) continue;
+          for (const item of g.models || []) out.push({ id: item.id, label: item.label || item.id, provider: pid, providerLabel: g.provider || pid });
         }
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
