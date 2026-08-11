@@ -1,24 +1,20 @@
 /**
  * hermes.mjs — client for the Hermes WebUI REST API used by the bridge.
  *
- * Pattern (proven in DuckChat's proxy.mjs):
+ * Chat pattern:
  *   1. POST /api/auth/login {password} -> Set-Cookie: hermes_session=<v>
  *   2. POST /api/session/new -> {session: {session_id}}
  *   3. POST /api/chat/start  -> {stream_id}
  *   4. GET  /api/chat/stream?stream_id=<id> -> SSE (typed `event:` frames)
  *
- * Event frames on the SSE stream (non-exhaustive, tolerant parser):
- *   event: context_status | metering | reasoning | token | done | complete
- *   data: {text: "chunk"}  for token/reasoning
- *   Tool calls arrive as `tool_call`-style frames carrying a JSON payload with
- *   tool name + args. We parse defensively and surface them as AG-UI tool events.
+ * The client also exposes requestJson() so the browser companion can read
+ * Hermes-native dashboard metadata (toolsets, skills, etc.) without duplicating
+ * Hermes configuration logic in the extension.
  */
 import { EventEmitter } from 'node:events';
 
 export class HermesClient extends EventEmitter {
-  /**
-   * @param {Object} cfg {baseUrl, password, model, modelProvider, workspace}
-   */
+  /** @param {Object} cfg {baseUrl, password, model, modelProvider, workspace} */
   constructor(cfg = {}) {
     super();
     this.baseUrl = (cfg.baseUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
@@ -31,8 +27,8 @@ export class HermesClient extends EventEmitter {
     this._sessionId = null;
   }
 
-  async _login() {
-    if (this._cookie && this._cookieExpiry > Date.now() + 60_000) return this._cookie;
+  async _login(force = false) {
+    if (!force && this._cookie && this._cookieExpiry > Date.now() + 60_000) return this._cookie;
     const r = await fetch(`${this.baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -47,6 +43,79 @@ export class HermesClient extends EventEmitter {
     return this._cookie;
   }
 
+  /**
+   * Authenticated JSON request to the Hermes WebUI API.
+   * Retries once after a 401/403 in case the cached Hermes session expired.
+   */
+  async requestJson(apiPath, options = {}) {
+    const path = String(apiPath || '').startsWith('/') ? String(apiPath) : `/${apiPath}`;
+    const method = String(options.method || 'GET').toUpperCase();
+    const doRequest = async (forceLogin = false) => {
+      const cookie = await this._login(forceLogin);
+      const headers = {
+        Accept: 'application/json',
+        Cookie: cookie,
+        ...(options.headers || {})
+      };
+      let body;
+      if (options.body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+      }
+      return fetch(`${this.baseUrl}${path}`, { method, headers, body });
+    };
+
+    let res = await doRequest(false);
+    if (res.status === 401 || res.status === 403) res = await doRequest(true);
+    const text = await res.text().catch(() => '');
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); }
+      catch { data = text; }
+    }
+    if (!res.ok) {
+      const detail = typeof data === 'string'
+        ? data
+        : (data?.detail || data?.error?.message || data?.error || '');
+      throw new Error(`Hermes ${method} ${path}: HTTP ${res.status}${detail ? ` ${String(detail).slice(0, 300)}` : ''}`);
+    }
+    return data;
+  }
+
+  async runtimeOverview() {
+    const [toolsetsResult, skillsResult] = await Promise.allSettled([
+      this.requestJson('/api/tools/toolsets'),
+      this.requestJson('/api/skills')
+    ]);
+
+    const toolsets = toolsetsResult.status === 'fulfilled' && Array.isArray(toolsetsResult.value)
+      ? toolsetsResult.value
+      : [];
+    const skills = skillsResult.status === 'fulfilled' && Array.isArray(skillsResult.value)
+      ? skillsResult.value
+      : [];
+    const enabledToolsets = toolsets.filter((row) => row?.enabled !== false);
+    const enabledSkills = skills.filter((row) => row?.enabled !== false);
+    const toolCount = enabledToolsets.reduce((sum, row) => sum + (Array.isArray(row?.tools) ? row.tools.length : 0), 0);
+
+    const errors = [];
+    if (toolsetsResult.status === 'rejected') errors.push({ resource: 'toolsets', error: toolsetsResult.reason?.message || String(toolsetsResult.reason) });
+    if (skillsResult.status === 'rejected') errors.push({ resource: 'skills', error: skillsResult.reason?.message || String(skillsResult.reason) });
+
+    return {
+      toolsets,
+      skills,
+      summary: {
+        toolsets: toolsets.length,
+        enabledToolsets: enabledToolsets.length,
+        tools: toolCount,
+        skills: skills.length,
+        enabledSkills: enabledSkills.length
+      },
+      errors
+    };
+  }
+
   async _ensureSession() {
     const cookie = await this._login();
     if (this._sessionId) return this._sessionId;
@@ -57,6 +126,8 @@ export class HermesClient extends EventEmitter {
         workspace: this.workspace || undefined,
         model: this.model,
         model_provider: this.modelProvider,
+        // Keep the existing session contract used by the companion. Runtime
+        // toolset discovery is read-only and does not silently mutate it.
         enabled_toolsets: ['hermes-cli', 'browser']
       })
     });
@@ -71,13 +142,9 @@ export class HermesClient extends EventEmitter {
   }
 
   /**
-   * Start a turn and open the SSE stream. Returns a Web ReadableStream whose
-   * parsed SSE frames are delivered as events to this emitter and to the
-   * `onFrame` callback. Caller decides when to stop reading.
-   *
-   * @param {string} message  the user turn text
-   * @param {Object} extra    {workspace?, model?, modelProvider?}
-   * @returns {{stream: ReadableStream, done: Promise<string>}}
+   * Start a turn and open the Hermes SSE stream.
+   * @param {string} message
+   * @param {Object} extra {workspace?, model?, modelProvider?, sessionId?}
    */
   async chatStream(message, extra = {}) {
     const cookie = await this._login();
@@ -96,43 +163,52 @@ export class HermesClient extends EventEmitter {
       model_provider: modelProvider,
       workspace: extra.workspace || this.workspace || undefined
     };
-    const start = await fetch(`${this.baseUrl}/api/chat/start`, {
+
+    const startChat = async () => fetch(`${this.baseUrl}/api/chat/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      headers: { 'Content-Type': 'application/json', Cookie: await this._login() },
       body: JSON.stringify(body)
     });
+
+    let start = await startChat();
     if (!start.ok) {
       const t = await start.text().catch(() => '');
-      if (start.status === 404 && /session\s+not\s+found/i.test(t)) {
+      if ((start.status === 401 || start.status === 403)) {
+        await this._login(true);
+        start = await startChat();
+        if (!start.ok) {
+          const retryText = await start.text().catch(() => '');
+          throw new Error(`Hermes chat/start: HTTP ${start.status} ${retryText.slice(0, 200)}`);
+        }
+      } else if (start.status === 404 && /session\s+not\s+found/i.test(t)) {
         this._sessionId = null;
         sessionId = await this._ensureSession();
         body.session_id = sessionId;
-        const retry = await fetch(`${this.baseUrl}/api/chat/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Cookie: cookie },
-          body: JSON.stringify(body)
-        });
-        if (retry.ok) {
-          const retryJson = await retry.json().catch(() => ({}));
-          if (!retryJson.stream_id) throw new Error('Hermes chat/start returned no stream_id');
-          const retryRes = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(retryJson.stream_id)}`, {
-            headers: { Cookie: cookie, Accept: 'text/event-stream' }
-          });
-          if (!retryRes.ok || !retryRes.body) throw new Error(`Hermes chat/stream: HTTP ${retryRes.status}`);
-          return { stream: retryRes.body, sessionId, stream_id: retryJson.stream_id };
+        start = await startChat();
+        if (!start.ok) {
+          const retryText = await start.text().catch(() => '');
+          throw new Error(`Hermes chat/start: HTTP ${start.status} ${retryText.slice(0, 200)}`);
         }
+      } else {
+        throw new Error(`Hermes chat/start: HTTP ${start.status} ${t.slice(0, 200)}`);
       }
-      throw new Error(`Hermes chat/start: HTTP ${start.status} ${t.slice(0, 200)}`);
     }
+
     const j = await start.json().catch(() => ({}));
     if (!j.stream_id) throw new Error('Hermes chat/start returned no stream_id');
-    const stream_id = j.stream_id;
+    const streamId = j.stream_id;
 
-    const res = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(stream_id)}`, {
-      headers: { Cookie: cookie, Accept: 'text/event-stream' }
+    let res = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`, {
+      headers: { Cookie: await this._login(), Accept: 'text/event-stream' }
     });
+    if (res.status === 401 || res.status === 403) {
+      const retryCookie = await this._login(true);
+      res = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`, {
+        headers: { Cookie: retryCookie, Accept: 'text/event-stream' }
+      });
+    }
     if (!res.ok || !res.body) throw new Error(`Hermes chat/stream: HTTP ${res.status}`);
-    return { stream: res.body, sessionId, stream_id };
+    return { stream: res.body, sessionId, stream_id: streamId };
   }
 
   resetSession() { this._sessionId = null; }
@@ -150,7 +226,7 @@ export async function* readSSE(body) {
       buf += decoder.decode(value, { stream: true });
       let idx;
       while ((idx = buf.search(/\n\n|\r\n\r\n/)) >= 0) {
-        const sep = buf[idx + 1] === '\n' && buf[idx] === '\r' ? 4 : 2;
+        const sep = buf.slice(idx, idx + 4).startsWith('\r\n\r\n') ? 4 : 2;
         const frame = buf.slice(0, idx);
         buf = buf.slice(idx + sep);
         if (frame.trim()) yield parseFrame(frame);
@@ -171,6 +247,8 @@ function parseFrame(frame) {
   }
   const data = dataLines.join('\n');
   let parsed = null;
-  if (data && data !== '[DONE]') { try { parsed = JSON.parse(data); } catch {} }
+  if (data && data !== '[DONE]') {
+    try { parsed = JSON.parse(data); } catch {}
+  }
   return { event, raw: frame, data: parsed, final: data === '[DONE]' };
 }
