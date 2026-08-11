@@ -5,25 +5,25 @@
   <title>Hermes</title>
   <link rel="stylesheet" href="common.css" />
   <style>
-    body { margin: 0; width: 340px; max-height: 420px; display: flex; flex-direction: column; background: var(--bg); }
-    .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-    .head .logo { font-size: 16px; }
-    .head .title { font-weight: 700; font-size: 14px; flex: 1; }
+    body { margin: 0; width: 350px; max-height: 430px; display: flex; flex-direction: column; background: var(--bg); }
+    .head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: linear-gradient(135deg, rgba(35,30,72,.9), rgba(18,28,43,.9)); }
+    .head .logo { width: 25px; height: 25px; border-radius: 8px; box-shadow: 0 5px 14px rgba(0,0,0,.24); }
+    .head .title { font-weight: 750; font-size: 14px; flex: 1; letter-spacing: -.01em; }
     .head button { padding: 4px 8px; font-size: 11px; }
-    #status { font-size: 11px; padding: 4px 12px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; align-items: center; }
+    #status { font-size: 11px; padding: 5px 12px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; align-items: center; }
     #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-    #status .dot.ok { background: var(--green); }
+    #status .dot.ok { background: var(--green); box-shadow: 0 0 6px rgba(79,225,138,.5); }
     #status .dot.err { background: var(--red); }
     #status .dot.busy { background: var(--amber); }
-    #page { margin: 8px 12px 0; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #page { margin: 8px 12px 0; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #page button { font-size: 10px; padding: 2px 6px; margin-left: 6px; }
-    #log { flex: 1; margin: 8px 12px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 6px; min-height: 60px; max-height: 180px; }
-    .msg { padding: 7px 9px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
-    .msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 25%, transparent); }
+    #log { flex: 1; margin: 8px 12px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 6px; min-height: 60px; max-height: 190px; }
+    .msg { padding: 7px 9px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+    .msg.user { align-self: flex-end; background: linear-gradient(135deg, rgba(144,119,255,.28), rgba(66,221,195,.10)); }
     .msg.assistant { align-self: flex-start; }
     .msg.tool { align-self: flex-start; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
     .msg.err { background: rgba(255,92,114,.12); border-color: rgba(255,92,114,.4); color: var(--red); }
-    .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+    .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: rgba(20,22,39,.7); }
     #prompt { flex: 1; }
     #send { padding: 8px 14px; }
     .grow { flex: 1; }
@@ -31,7 +31,7 @@
 </head>
 <body>
   <div class="head">
-    <span class="logo">⚡</span>
+    <img class="logo" src="../icons/icon32.png" alt="" />
     <span class="title">Hermes</span>
     <button id="openPanel">Side panel →</button>
     <button id="clear">Clear</button>
