@@ -161,7 +161,7 @@ function summary(root = document) {
 /**
  * Snapshot the page. Returns the full structured context object.
  */
-export function readPage() {
+function readPage() {
   const root = document;
   const s = summary(root);
   const interactive = collectInteractive(root);
@@ -181,7 +181,7 @@ export function readPage() {
 }
 
 /** A short stable key for change detection. */
-export function snapshotKey() {
+function snapshotKey() {
   return `${location.href}|${document.title}|${(document.body ? cleanText(document.body.innerText||'') : '').slice(0, 200)}`;
 }
 

@@ -33,7 +33,6 @@
     {
       "matches": ["<all_urls>"],
       "js": [
-        "lib/agui-client.js",
         "lib/page-reader.js",
         "lib/page-actor.js",
         "lib/content.js"

@@ -176,7 +176,7 @@ function cleanText(s) { return String(s).replace(/\s+/g, ' ').trim(); }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /** Main dispatcher: run one action, return a normalized {ok, value|error}. */
-export async function runAction(action) {
+async function runAction(action) {
   if (!action || typeof action !== 'object') return { ok: false, error: 'no action' };
   const name = String(action.name || action.action || '').replace(/^browser[:_-]?/, '');
   const p = action.params || action.payload || action.args || action;
@@ -198,7 +198,7 @@ export async function runAction(action) {
 }
 
 /** Run a batch of actions sequentially, stopping on first failure if `stopOnError`. */
-export async function runActions(actions, opts = {}) {
+async function runActions(actions, opts = {}) {
   const results = [];
   for (const a of actions || []) {
     const r = await runAction(a);
