@@ -291,26 +291,37 @@ const server = http.createServer(async (req, res) => {
       const m = sc.match(/(?:^|,\s*)(?:[^;]+;\s*)?hermes_session(?:_at)?=([^;]+)/);
       if (!m) throw new Error('login cookie missing');
       const cookie = `hermes_session=${m[1]}`;
-      let r = await fetch(`${cfg.hermesUrl}/api/model/options?explicit_only=true&include_unconfigured=false`, { headers: { Cookie: cookie } });
-      let data = r.ok ? await r.json().catch(() => ({})) : null;
-      if (!data) {
+      let r = await fetch(`${cfg.hermesUrl}/api/providers`, { headers: { Cookie: cookie } });
+      let providerData = r.ok ? await r.json().catch(() => ({})) : null;
+      if (!providerData || !Array.isArray(providerData.providers)) {
         r = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
-        data = await r.json().catch(() => ({}));
+        providerData = await r.json().catch(() => ({}));
       }
+      const catalogRes = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
+      const catalogData = catalogRes.ok ? await catalogRes.json().catch(() => ({})) : {};
       const out = [];
-      if (Array.isArray(data.providers)) {
-        for (const g of data.providers) {
-          const pid = g.slug || g.provider_id || '';
+      if (Array.isArray(providerData.providers)) {
+        // /api/providers is the authoritative authenticated inventory. It
+        // includes configured API-key/OAuth providers and excludes catalog-only
+        // providers whose credentials are absent.
+        for (const g of providerData.providers) {
+          const configured = g.has_key === true && !g.auth_error;
+          const isActiveMoA = g.id === cfg.modelProvider || g.id === providerData.active_provider;
+          if (!configured && !isActiveMoA) continue;
           for (const item of g.models || []) {
             const id = typeof item === 'string' ? item : item.id;
-            if (id) out.push({ id, label: typeof item === 'string' ? item : (item.label || id), provider: pid, providerLabel: g.name || g.provider || pid });
+            if (id) out.push({ id: g.id === 'moa' ? id : `@${g.id}:${id}`, label: typeof item === 'string' ? item : (item.label || id), provider: g.id, providerLabel: g.display_name || g.id });
           }
         }
+        const active = catalogData.active_provider;
+        if (active === 'moa' && !out.some((item) => item.provider === 'moa')) {
+          const group = (catalogData.groups || []).find((item) => item.provider_id === 'moa');
+          for (const item of (group?.models || [])) out.push({ id: item.id, label: item.label || item.id, provider: 'moa', providerLabel: group.provider || 'Mixture of Agents' });
+        }
       } else {
-        // Legacy /api/models has no configured/authenticated flags. Only show
-        // the active provider rather than advertising the entire catalog.
-        const active = data.active_provider || cfg.modelProvider;
-        for (const g of (data.groups || [])) {
+        // Legacy fallback for older Hermes builds.
+        const active = providerData.active_provider || cfg.modelProvider;
+        for (const g of (providerData.groups || [])) {
           const pid = g.provider_id || '';
           if (pid !== active) continue;
           for (const item of g.models || []) out.push({ id: item.id, label: item.label || item.id, provider: pid, providerLabel: g.provider || pid });
@@ -319,8 +330,8 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         object: 'list',
-        active_provider: data.active_provider,
-        default_model: data.default_model,
+        active_provider: catalogData.active_provider || providerData.active_provider,
+        default_model: catalogData.default_model || providerData.default_model,
         data: out
       }));
     } catch (e) {
