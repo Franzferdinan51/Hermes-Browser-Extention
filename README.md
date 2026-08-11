@@ -1,134 +1,212 @@
 # Hermes Browser Companion
 
-Connect **Hermes Agent** (Nous Research) to your Chrome browser over the **AG-UI protocol** — so your agent can read whatever page you're on, stream polished responses, expose its tool activity, and act on the live tab.
+A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-Scaffolded from / inspired by:
-- **Hermes Agent** — https://github.com/NousResearch/hermes-agent (MIT)
-- **AG-UI** (Agent-User Interaction Protocol) — https://github.com/ag-ui-protocol/ag-ui (MIT)
-- **BrowserOS** — https://github.com/browseros-ai/BrowserOS (AGPL-3.0; architecture/UX ideas reviewed, no BrowserOS source copied)
+**Current release: 0.3.0**
 
----
+Sources and design references:
 
-## What it does
+- **Hermes Agent** — MIT — authoritative runtime/tool behavior
+- **AG-UI** — MIT — agent ↔ UI event protocol
+- **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
+- **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
 
-- **Reads the page** — a content script turns any page's DOM into an agent-readable snapshot (text, headings, links, forms, inputs, an accessibility-style tree with stable `eN` refs, and an interaction map with current values), which is attached to your messages as AG-UI `context`.
-- **Talks to Hermes** — a tiny local Node bridge (`bridge/`) exposes Hermes as an AG-UI-compatible agent endpoint (`POST /agent` -> `text/event-stream`). It logs into Hermes's WebUI REST API and streams responses as AG-UI protocol events (`RUN_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM`, `RUN_FINISHED`).
-- **Preserves the real user turn** — the bridge sends page context, conversation roles, **and the current user request** to Hermes. This sounds obvious, but it is a critical contract: the agent should never receive a page dump + tool instructions while losing the actual question.
-- **Acts on the page** — Hermes browser calls are mirrored to the extension over WebSocket and executed against the active tab. Each request carries a unique `requestId`, so multiple browser actions cannot steal one another's replies.
-- **Understands Hermes refs** — page controls accept both `e12` and the Hermes-native `@e12` form.
-- **Shows useful agent state without leaking hidden reasoning** — the panel receives lifecycle states such as `Thinking…`, `Reasoning…`, and `Using browser_click…`, but raw private reasoning text is not rendered.
-- **Renders responses cleanly** — the side panel supports lightweight headings, lists, quotes, code blocks, inline code, links, response copy controls, and collapsible tool cards with arguments/results.
-- **Streams in real time** — a docked **side panel** renders live AG-UI events. A toolbar **popup** gives quick chat + connection status. An **options** page wires the bridge URL, Hermes model, and workspace with a live health check.
+## What 0.3.0 adds
+
+- **Hermes-native runtime inspector** — the side panel reads Hermes's real `/api/tools/toolsets` and `/api/skills` data through `GET /v1/runtime`. Expand **Hermes runtime** to see enabled toolsets, tool counts, configured/unconfigured status, enabled skills, provenance, and partial runtime errors.
+- **Better agent responses** — streamed text is reconciled into a richer final response with headings, lists, blockquotes, code blocks, inline code, safe HTTP(S) links, and a copy button.
+- **Real tool timeline** — multiple tool calls are tracked independently by `toolCallId`; tool arguments/results live in collapsible cards instead of one mutable global tool box.
+- **Useful live status without hidden reasoning** — `Thinking…`, `Reasoning…`, `Using <tool>…`, context usage, and metering are surfaced as lifecycle metadata. Raw private reasoning text is not rendered.
+- **Fixed critical prompt bug** — the current user message is now always included in the Hermes turn alongside page context/history.
+- **Hermes refs work correctly** — both `e12` and native-style `@e12` references resolve against `data-hermes-ref` elements.
+- **Correlated active-tab actions** — browser-action requests carry a unique `requestId` and `toolCallId`, so concurrent actions cannot consume one another's result.
+- **No accidental `web_search` DOM execution** — only an explicit allowlist of compatible Hermes `browser_*` tools can be mirrored into the active tab.
+- **More capable page actor** — robust click/type/key/scroll/read/grep/hover/select/wait/image/snapshot helpers plus native tab navigation helpers.
+- **Bridge hardening** — loopback-only bind, extension-origin checks, optional HTTP + WebSocket token auth, HTTP(S)-only navigation, and constant-time token comparison.
+- **CI** — bridge self-test, jsdom page-actor tests, and syntax checks on push/PR, plus manual `workflow_dispatch`.
 
 ## Architecture
 
-```
-┌──────────────────────────── Chrome Extension (MV3) ────────────────────────────┐
-│  popup / options / side-panel UI                                              │
-│        │                                                                      │
-│  background (service worker)  ←  AGUIClient (lib/agui-client.js)              │
-│        │            │                                                         │
-│        │  chrome.tabs sendMessage       correlated WebSocket browser actions  │
-│        ▼            ▼                                                         │
-│  content script ──> page-reader.js (DOM + accessibility snapshot)             │
-│               └──> page-actor.js  (click/type/scroll/wait/hover/select/etc.)  │
-└───────────────────────────────────────────────────────────────────────────────┘
-                               │  POST /agent (AG-UI SSE) + WS tool handoff
+```text
+┌──────────────────────── Chrome Extension (MV3) ────────────────────────┐
+│ side panel / popup / options                                           │
+│              │                                                         │
+│       background service worker                                        │
+│        │          │                    │                                │
+│        │          │                    └── GET /v1/runtime              │
+│        │          └── AG-UI POST /agent                                │
+│        │                                                               │
+│        └── active-tab content scripts                                  │
+│             ├── page-reader.js  → DOM/accessibility snapshot           │
+│             └── page-actor.js   → compatible mirrored actions          │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │ HTTP/SSE + authenticated WS
                                ▼
-                    ┌──────────────────────────┐
-                    │  bridge/server.mjs (Node) │  ← AG-UI <-> Hermes adapter
-                    └────────────┬─────────────┘
-                                 │  Hermes WebUI REST (login → chat/start → chat/stream)
+                    ┌────────────────────────┐
+                    │ bridge/server.mjs      │
+                    │ AG-UI ↔ Hermes adapter │
+                    └────────────┬───────────┘
+                                 │ authenticated Hermes WebUI API
                                  ▼
-                          Hermes Agent (:8787)
+                           Hermes Agent
 ```
+
+The extension does **not** replace Hermes's own tool runtime. Hermes remains the source of truth for tool execution. The active-tab bridge mirrors only the core browser calls it can faithfully represent in the user's current tab.
 
 ## Quick start
 
-### 1. Start the bridge
+### 1. Start Hermes and the bridge
 
 ```bash
 cd bridge
 npm install
-npm start          # listens on http://127.0.0.1:8965
+npm start
 ```
 
-The bridge auto-loads Hermes's WebUI password from `~/.hermes/.hermes-webui.env`, so you usually don't need to configure anything. If Hermes's WebUI was updated while running, restart it first (`hermes restart` / relaunch the app) — otherwise `chat/start` can return a stale-runtime error.
+The bridge listens on `http://127.0.0.1:8965` and auto-loads Hermes's WebUI password from `~/.hermes/.hermes-webui.env` when available.
+
+Optional hardening:
+
+```bash
+BRIDGE_AUTH_TOKEN="use-a-long-random-local-token" npm start
+```
+
+If you set `BRIDGE_AUTH_TOKEN`, paste the same value into the extension's **Bridge auth token** setting. It protects both HTTP and WebSocket bridge traffic. Do **not** reuse an OpenAI/Nous/provider API key as this token.
 
 ### 2. Load the extension
 
-1. Open `chrome://extensions`
-2. Enable **Developer mode** (top-right)
-3. Click **Load unpacked** and select the `extension/` folder
-4. Pin the Hermes toolbar icon
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select the `extension/` directory.
+5. Pin the Hermes icon if desired.
 
-### 3. Connect (options page)
+### 3. Open the side panel
 
-- Click the Hermes icon → **Options**, or right-click → Options.
-- **Test connection** — verifies the bridge and Hermes are reachable (shows Hermes URL + WS clients).
-- Default bridge URL is `http://127.0.0.1:8965`. Adjust model / provider / workspace if needed.
+Click the Hermes extension icon. The panel will:
 
-### 4. Use it
+- discover configured Hermes models,
+- load the real Hermes toolset/skill inventory,
+- attach a fresh page snapshot when **attach page** is enabled,
+- stream Hermes text/tool activity,
+- show connection/runtime state,
+- mirror compatible browser actions into the active tab when page acting is enabled.
 
-- Click the toolbar icon to open the **side panel** (`chrome.sidePanel`).
-- The panel auto-attaches a page snapshot (`attach page` checkbox). Type a message — Hermes answers and can drive the page.
-- Tool activity appears as collapsible cards; Hermes lifecycle state appears in the composer status area.
-- The toolbar **popup** is a quick chat + status surface.
+## Hermes runtime inspector
 
-## Endpoints (bridge)
+`GET /v1/runtime` is intentionally **read-only**. It proxies Hermes's own runtime metadata instead of keeping a second hard-coded capability list.
 
-| Method | Path           | Purpose                                                   |
-|--------|----------------|-----------------------------------------------------------|
-| POST   | `/agent`       | AG-UI agent endpoint (`Accept: text/event-stream`)        |
-| GET    | `/healthz`     | Liveness + Hermes reachability + pending browser actions  |
-| GET    | `/v1/models`   | Searchable configured Hermes model inventory              |
-| WS     | `/ws`          | Correlated browser-tool handoff channel                   |
-| POST   | `/tool-result` | Alternative result channel keyed by `requestId`           |
+The panel shows:
 
-## Browser tools
+- enabled toolsets,
+- number of tools in each enabled toolset,
+- whether a toolset still needs configuration,
+- enabled skills,
+- skill provenance/usage where Hermes reports it,
+- partial errors if an older Hermes build lacks one of the metadata routes.
 
-The bridge recognizes Hermes browser/page/DOM tools and maps them onto the live tab. Generic tools such as `web_search` are intentionally **not** treated as DOM actions.
+This is fail-soft: chat/model use can continue even if toolset or skill metadata is unavailable.
 
-Supported browser-companion actions include:
+## Hermes browser tools
 
-- `browser_snapshot()` — fresh DOM/accessibility snapshot + interactive refs
-- `browser_read(selector?)` / extract-text style calls — read page or element text/value
-- `browser_grep(pattern)` — search visible page text / refs without dumping the whole page
-- `browser_click(@e12 | e12 | selector | visible text)` — click a referenced element
-- `browser_type(...)` / fill / set-value calls — enter text
-- `browser_scroll(direction, amount)` — vertical or horizontal scroll
-- `browser_hover(...)` — hover an element
-- `browser_select_option(..., value)` — select a dropdown option
-- `browser_press(key)` — keyboard input including modifier chords
-- `browser_wait(ms | selector | text)` — fixed wait or mutation-driven wait for page content
-- `browser_get_images()` — image metadata from the active page
-- `browser_navigate(url)` — navigate the active tab to an HTTP(S) URL
-- `browser_back()` / `browser_forward()` / `browser_reload()` — tab navigation controls
+The bridge prompt is aligned to Hermes's current **core browser toolset**:
 
-The control loop follows the useful **snapshot → act → verify** pattern used by strong agentic browsers. BrowserOS also inspired the emphasis on fewer, more purposeful browser calls and wait-for-condition behavior; because BrowserOS is AGPL-3.0, those concepts were reimplemented here rather than copying its source.
+```text
+browser_navigate
+browser_snapshot
+browser_click
+browser_type
+browser_scroll
+browser_back
+browser_press
+browser_get_images
+browser_console
+browser_vision
+```
 
-## Security notes
+The extension mirrors this compatible subset into the active tab:
 
-- **Local-only by default.** The bridge binds to `127.0.0.1`. The extension talks to it over HTTP/WS.
-- **No secrets copied.** The bridge reads Hermes's password from its existing env file and never prints it. The extension stores only a bridge URL and optional auth token.
-- **Navigation is restricted to HTTP(S).** `javascript:`, `data:`, browser-internal, and other non-web schemes are rejected by the service worker's native navigation path.
-- **Generic web tools are not DOM tools.** The bridge only mirrors explicit browser/page/DOM tool namespaces, reducing accidental action routing.
-- Disable **"Allow Hermes to interact with the page"** in options for read-only mode.
+```text
+browser_navigate
+browser_snapshot
+browser_click
+browser_type
+browser_scroll
+browser_back
+browser_press
+browser_get_images
+```
+
+`browser_console` and `browser_vision` stay Hermes-native and still appear in the tool timeline when Hermes emits them; the extension does not pretend to implement them.
+
+The page actor also contains local compatibility helpers such as read/grep/hover/select/wait/forward/reload. Those helpers support extension internals and future companion tooling, but **they are not advertised to Hermes as registered core tools**.
+
+Generic web tools such as `web_search` and `web_extract` are never treated as active-tab DOM commands.
+
+## BrowserOS ideas incorporated
+
+BrowserOS has several strong browser-agent patterns. Because BrowserOS is AGPL-3.0, the project only uses the **ideas**, reimplemented independently:
+
+- favor fewer, purposeful browser actions,
+- stable element references,
+- bounded tool outputs,
+- wait-for-condition behavior instead of arbitrary sleeps where possible,
+- explicit page/action ownership,
+- action lifecycle + result correlation,
+- snapshot → act → verify as the mental model.
+
+No BrowserOS source file was cherry-picked or copied.
+
+## Bridge endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/agent` | AG-UI SSE agent endpoint |
+| `GET` | `/healthz` | bridge/Hermes health, WS clients, pending actions |
+| `GET` | `/v1/models` | configured Hermes model inventory |
+| `GET` | `/v1/runtime` | Hermes-native toolset + skill inventory |
+| `WS` | `/ws` | correlated active-tab action handoff |
+| `POST` | `/tool-result` | alternate correlated action-result channel |
+
+## Security model
+
+- The bridge binds to **`127.0.0.1` only**.
+- Browser-origin HTTP/WS traffic is accepted only from extension origins; requests with an unrelated web origin are rejected.
+- `BRIDGE_AUTH_TOKEN` can protect every bridge HTTP route and the WS upgrade.
+- The extension sends its token in the HTTP `Authorization` header and the browser WS handshake query because browser `WebSocket` cannot set an Authorization header.
+- Hermes's WebUI password is used by the local bridge only and is never sent to the extension UI.
+- Active-tab native navigation accepts `http:` and `https:` URLs only.
+- `web_search`/other generic tools cannot fall through into DOM execution.
+- Disable **Allow Hermes to interact with the page** for read-only page context.
 
 ## Tests
 
-GitHub Actions runs bridge, DOM, and JavaScript syntax checks on every push to `main` and on pull requests.
+Bridge test:
 
 ```bash
-# Bridge AG-UI translation (self-contained; uses a fake Hermes; no live runtime)
-cd bridge && npm install && npm test          # expect: 17 passed, 0 failed
-
-# Page reader + actor against a real DOM fixture (jsdom)
-cd test && npm install && npm test            # expect: 21 passed, 0 failed
+cd bridge
+npm ci
+npm test
+# expected contract: 24 passed, 0 failed
 ```
 
-The bridge test specifically checks that the current user message reaches Hermes, raw reasoning text is not leaked, context/metering events survive translation, and browser calls fail fast when no extension is attached.
+The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.
+
+Page reader/actor test:
+
+```bash
+cd test
+npm ci
+npm test
+# expected contract: 21 passed, 0 failed
+```
+
+GitHub Actions runs both suites plus `node --check` over the extension modules. The workflow also supports a manual run from the Actions tab.
+
+## Important current limitation
+
+The active-tab WebSocket path is a **mirror/companion surface**, not a replacement for Hermes's internal browser backend. A deeper native integration should use a Hermes companion plugin with owner-scoped Browser Context Protocol data so Hermes can request current-tab context as a first-class tool. That integration is being kept separate until the BCP/session ownership contract can be wired correctly rather than shipping a fake or unsafe implementation.
 
 ## License
 
-MIT. Portions adapt patterns from Hermes Agent and the AG-UI protocol; see their repositories for their MIT licenses. BrowserOS is reviewed only as an architectural reference and no BrowserOS source is included.
+MIT. Hermes/AG-UI-derived patterns retain their respective MIT lineage. BrowserOS is referenced only for architecture/UX ideas; no AGPL BrowserOS source is included.
