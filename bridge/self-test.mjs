@@ -4,6 +4,7 @@
  */
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { WebSocket } from 'ws';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -140,6 +141,26 @@ const authHeaders = { Authorization: `Bearer ${BRIDGE_TOKEN}` };
 async function main() {
   await wait(700);
 
+  const companionActions = [];
+  const companion = new WebSocket(`ws://127.0.0.1:${BRIDGE_PORT}/ws?token=${encodeURIComponent(BRIDGE_TOKEN)}`, {
+    origin: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
+  });
+  companion.on('message', (raw) => {
+    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+    if (msg.kind !== 'browser-action') return;
+    companionActions.push(msg);
+    companion.send(JSON.stringify({
+      kind: 'browser-result',
+      requestId: msg.requestId,
+      toolCallId: msg.toolCallId,
+      result: { ok: true, title: 'Fake active tab' }
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    companion.once('open', resolve);
+    companion.once('error', reject);
+  });
+
   // Security boundary.
   const noAuth = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`);
   ok(noAuth.status === 401, 'bridge token protects HTTP endpoints');
@@ -210,7 +231,8 @@ async function main() {
   ok(body.includes('"kind":"metering"'), 'surfaces metering as CUSTOM metadata');
   ok(body.includes('"phase":"reasoning"'), 'surfaces reasoning lifecycle without raw reasoning');
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
-  ok(body.includes('"phase":"browser-unavailable"'), 'mirrorable browser tool reports missing companion without blocking');
+  ok(body.includes('"phase":"browser"'), 'mirrorable browser tool is dispatched to companion');
+  ok(companionActions.some((item) => item.action?.name === 'click' && item.requestId), 'companion receives correlated browser click');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 
@@ -222,6 +244,7 @@ async function main() {
   ok(!sentMessage.includes('browser_hover(') && !sentMessage.includes('browser_wait('), 'prompt does not advertise extension-only helpers as Hermes tools');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
+  companion.close();
   child.kill();
   fake.close();
   if (failed) {
