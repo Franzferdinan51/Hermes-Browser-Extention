@@ -1,213 +1,354 @@
 /**
- * PageActor — executes DOM actions on behalf of the agent. Hermes emits a
- * tool call (e.g. { name: "browser_click", args: {...} }) and the bridge / SW
- * forward a normalized action here. This module runs in the content-script
- * (page) context so it can touch the real DOM.
+ * PageActor — executes DOM actions on behalf of Hermes in the active page.
  *
- * Supported actions (action.name):
- *   click       {selector}
- *   fill        {selector, value}
- *   type        {selector, text}           (progressive; dispatches input events)
- *   key         {keys}                     (dispatch keyboard events on document.activeElement)
- *   scroll      {selector?, direction?, amount?} | {y?}
- *   navigate    {url}                      (location.href = url — handled by SW typically)
- *   focus       {selector}
- *   read        {selector?}                (return text/value of element or whole page)
- *   wait        {ms}
- *   extract     {selector, prop?}
- *   set_value   {selector, value}          (set .value + dispatch input/change)
- *
- * Returns a result object {ok, value?, error?}.
+ * Hermes' browser tools commonly refer to accessibility elements as @e1, @e2,
+ * etc. PageReader stores the same ids in data-hermes-ref attributes, so this
+ * actor resolves both @e1 and e1 before falling back to CSS/text matching.
  */
 
-const BASE_SELECTOR_LIMIT = 50;
+const OUTPUT_LIMIT = 25000;
+const DEFAULT_WAIT_MS = 1000;
+const MAX_WAIT_MS = 30000;
+
+function cleanText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function refSelector(value) {
+  const match = String(value || '').trim().match(/^@?(e\d+)$/i);
+  return match ? `[data-hermes-ref="${match[1]}"]` : '';
+}
 
 function el(selector, root = document) {
-  if (selector instanceof Element) return selector;
-  const ref = String(selector || '').match(/^e\d+$/i);
+  if (typeof Element !== 'undefined' && selector instanceof Element) return selector;
+  const raw = String(selector || '').trim();
+  if (!raw) return null;
+
+  const ref = refSelector(raw);
   if (ref) {
-    const byRef = root.querySelector(`[data-hermes-ref="${ref[0]}"]`);
+    const byRef = root.querySelector(ref);
     if (byRef) return byRef;
   }
+
   try {
-    const found = root.querySelector(selector);
+    const found = root.querySelector(raw);
     if (found) return found;
   } catch {}
-  // Fallback: try by text match for buttons/links if a selector looks like text
-  const needle = String(selector).toLowerCase();
-  const byText = Array.from(root.querySelectorAll('button,a,[role="button"]'))
-    .find((e) => String(e.textContent || '').trim().toLowerCase() === needle);
-  return byText || null;
+
+  const needle = raw.toLowerCase();
+  const candidates = Array.from(root.querySelectorAll(
+    'button,a,input,textarea,select,[role="button"],[role="link"],[role="textbox"],[contenteditable="true"]'
+  ));
+  return candidates.find((node) => {
+    const text = cleanText(node.textContent || node.value || node.getAttribute('aria-label') || node.getAttribute('title'));
+    return text.toLowerCase() === needle;
+  }) || null;
+}
+
+function targetLabel(params = {}) {
+  return params.selector || params.element || params.ref || params.target || 'target';
 }
 
 function dispatchInput(target, value) {
-  // Pick the correct value setter based on the element type so set_value works
-  // on inputs, textareas, AND selects without throwing.
+  const text = String(value ?? '');
+  if (target.isContentEditable) {
+    target.textContent = text;
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    return;
+  }
+
   const proto =
     (target instanceof HTMLTextAreaElement && HTMLTextAreaElement.prototype) ||
     (target instanceof HTMLSelectElement && HTMLSelectElement.prototype) ||
     (target instanceof HTMLInputElement && HTMLInputElement.prototype) ||
     null;
-  let setter = proto && Object.getOwnPropertyDescriptor(proto, 'value');
-  if (setter && setter.set) {
-    try { setter.set.call(target, value); } catch { target.value = value; }
+  const descriptor = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+  if (descriptor?.set) {
+    try { descriptor.set.call(target, text); } catch { target.value = text; }
   } else {
-    target.value = value;
+    target.value = text;
   }
+
   if (target.tagName === 'SELECT') {
-    const val = String(value ?? '');
-    const opt = Array.from(target.options || []).find((o) => o.value === val || o.text === val);
-    if (opt) target.value = opt.value;
+    const option = Array.from(target.options || []).find((o) => o.value === text || cleanText(o.textContent) === text);
+    if (option) target.value = option.value;
   }
   target.dispatchEvent(new Event('input', { bubbles: true }));
   target.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-function fire(target, type, init = {}) {
-  const ev = new MouseEvent(type, { bubbles: true, cancelable: true, view: window, ...init });
-  target.dispatchEvent(ev);
+function fireMouse(target, type, init = {}) {
+  target.dispatchEvent(new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    ...init
+  }));
 }
 
-async function actionClick(p) {
-  const target = el(p.selector || p.element);
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  await sleep(120);
-  target.focus({ preventScroll: true });
-  fire(target, 'mousedown', { button: 0 });
-  fire(target, 'mouseup', { button: 0 });
-  fire(target, 'click', { button: 0 });
-  return { ok: true, value: `clicked ${p.selector}` };
+async function actionClick(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  await sleep(60);
+  try { target.focus({ preventScroll: true }); } catch {}
+  fireMouse(target, 'pointerdown', { button: 0 });
+  fireMouse(target, 'mousedown', { button: 0 });
+  fireMouse(target, 'mouseup', { button: 0 });
+  fireMouse(target, 'click', { button: 0 });
+  return { ok: true, value: `clicked ${selector}` };
 }
 
-async function actionFill(p) {
-  const target = el(p.selector || p.element);
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  target.focus({ preventScroll: true });
-  dispatchInput(target, String(p.value ?? ''));
-  if (target.tagName === 'SELECT') {
-    // best-effort select option
-    const val = String(p.value ?? '');
-    const opt = Array.from(target.options).find((o) => o.value === val || o.text === val);
-    if (opt) {
-      target.value = opt.value;
-      target.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }
-  return { ok: true, value: `filled ${p.selector}` };
+async function actionSetValue(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  try { target.focus({ preventScroll: true }); } catch {}
+  dispatchInput(target, p.value ?? p.text ?? '');
+  return { ok: true, value: `set ${selector}` };
 }
 
-async function actionType(p) {
-  const target = el(p.selector || p.element);
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  target.focus({ preventScroll: true });
-  const text = String(p.text ?? '');
-  // Type char-by-char with tiny gaps so frameworks catch it; fallback to set_value
-  await sleep(50);
+async function actionType(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  try { target.focus({ preventScroll: true }); } catch {}
+  const text = String(p.text ?? p.value ?? '');
   dispatchInput(target, text);
-  return { ok: true, value: `typed into ${p.selector || 'focused'} (${text.length} chars)` };
+  return { ok: true, value: `typed into ${selector} (${text.length} chars)` };
 }
 
-async function actionKey(p) {
-  const keys = Array.isArray(p.keys) ? p.keys : String(p.keys || '').split('+').map((k) => k.trim());
+function parseKeyChord(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split('+');
+  const parts = raw.map((part) => String(part).trim()).filter(Boolean);
+  const aliases = {
+    esc: 'Escape', escape: 'Escape', enter: 'Enter', return: 'Enter', tab: 'Tab',
+    space: ' ', backspace: 'Backspace', delete: 'Delete', arrowdown: 'ArrowDown',
+    arrowup: 'ArrowUp', arrowleft: 'ArrowLeft', arrowright: 'ArrowRight',
+    ctrl: 'Control', control: 'Control', shift: 'Shift', alt: 'Alt', option: 'Alt',
+    cmd: 'Meta', command: 'Meta', meta: 'Meta'
+  };
+  return parts.map((part) => aliases[part.toLowerCase()] || part);
+}
+
+async function actionKey(p = {}) {
+  const keys = parseKeyChord(p.keys ?? p.key ?? p.text);
+  if (!keys.length) return { ok: false, error: 'press requires a key' };
   const target = document.activeElement || document.body;
-  const keyMap = { enter: 'Enter', escape: 'Escape', esc: 'Escape', tab: 'Tab', arrowdown: 'ArrowDown', arrowup: 'ArrowUp', backspace: 'Backspace', delete: 'Delete', control: 'Control', shift: 'Shift', alt: 'Alt', meta: 'Meta' };
-  for (const k of keys) {
-    const key = keyMap[k.toLowerCase()] || k;
-    const isMod = /^(Control|Shift|Alt|Meta|Cmd)$/.test(key);
-    const mods = { ctrlKey: keys.includes('Control') || keys.includes('control'), shiftKey: keys.includes('Shift') || keys.includes('shift'), altKey: keys.includes('Alt') || keys.includes('alt'), metaKey: keys.includes('Meta') || keys.includes('Cmd') || keys.includes('cmd') };
-    const evOpts = { key, code: key, bubbles: true, cancelable: true, ...mods };
-    target.dispatchEvent(new KeyboardEvent('keydown', evOpts));
-    if (!isMod && key.length === 1) { target.dispatchEvent(new KeyboardEvent('keypress', evOpts)); }
-    else if (!isMod) { target.dispatchEvent(new KeyboardEvent('keyup', evOpts)); }
-    await sleep(40);
-  }
-  return { ok: true, value: `sent keys ${keys.join('+')}` };
+  const modifiers = {
+    ctrlKey: keys.includes('Control'),
+    shiftKey: keys.includes('Shift'),
+    altKey: keys.includes('Alt'),
+    metaKey: keys.includes('Meta')
+  };
+  const primary = [...keys].reverse().find((key) => !['Control', 'Shift', 'Alt', 'Meta'].includes(key)) || keys[keys.length - 1];
+  const opts = { key: primary, code: primary, bubbles: true, cancelable: true, composed: true, ...modifiers };
+  target.dispatchEvent(new KeyboardEvent('keydown', opts));
+  if (primary.length === 1) target.dispatchEvent(new KeyboardEvent('keypress', opts));
+  target.dispatchEvent(new KeyboardEvent('keyup', opts));
+  await sleep(20);
+  return { ok: true, value: `pressed ${keys.join('+')}` };
 }
 
-function actionScroll(p) {
-  if (p.y !== undefined || p.selector) {
-    const t = p.selector ? el(p.selector) : document.scrollingElement;
-    if (!t) return { ok: false, error: 'scroll target missing' };
-    if (p.y !== undefined) t.scrollTo({ top: p.y, behavior: p.smooth ? 'smooth' : 'auto' });
-    else {
-      const dir = p.direction || 'down';
-      const amt = p.amount ?? 500;
-      const delta = dir === 'up' ? -amt : amt;
-      t.scrollBy({ top: delta, behavior: p.smooth ? 'smooth' : 'auto' });
-    }
-    return { ok: true, value: `scrolled ${p.direction || p.y}` };
+function actionScroll(p = {}) {
+  const amount = Math.max(1, Number(p.amount) || 600);
+  const direction = String(p.direction || 'down').toLowerCase();
+  const target = p.selector || p.element || p.ref ? el(targetLabel(p)) : (document.scrollingElement || document.documentElement);
+  if (!target) return { ok: false, error: `Scroll target not found: ${targetLabel(p)}` };
+
+  if (p.y !== undefined) {
+    target.scrollTo({ top: Number(p.y) || 0, behavior: p.smooth ? 'smooth' : 'auto' });
+    return { ok: true, value: `scrolled to ${Number(p.y) || 0}` };
   }
-  window.scrollBy({ top: (p.direction === 'up' ? -(p.amount ?? 500) : (p.amount ?? 500)), behavior: p.smooth ? 'smooth' : 'auto' });
-  return { ok: true };
+
+  const axis = /left|right/.test(direction) ? 'left' : 'top';
+  const sign = /up|left/.test(direction) ? -1 : 1;
+  target.scrollBy({ [axis]: sign * amount, behavior: p.smooth ? 'smooth' : 'auto' });
+  return { ok: true, value: `scrolled ${direction} ${amount}` };
 }
 
-function actionRead(p) {
-  const target = p.selector ? el(p.selector) : document;
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
+function actionRead(p = {}) {
+  const selector = p.selector || p.element || p.ref;
+  const target = selector ? el(selector) : document.body;
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
   let value = '';
   if (p.prop && target[p.prop] !== undefined) value = String(target[p.prop]);
-  else if (target.value !== undefined) value = String(target.value);
+  else if ('value' in target && target.value !== undefined) value = String(target.value);
   else value = cleanText(target.innerText || target.textContent || '');
-  return { ok: true, value: value.slice(0, 25000) };
+  return { ok: true, value: value.slice(0, OUTPUT_LIMIT), truncated: value.length > OUTPUT_LIMIT };
 }
 
-function actionFocus(p) {
-  const target = el(p.selector);
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  target.focus({ preventScroll: true });
-  return { ok: true, value: 'focused' };
-}
-
-function actionWait(p) {
-  return sleep(p.ms ?? 1000).then(() => ({ ok: true, value: `waited ${p.ms ?? 1000}ms` }));
-}
-
-function actionExtract(p) {
-  const target = el(p.selector || 'body');
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  if (p.prop !== undefined) return { ok: true, value: target[p.prop] };
-  return { ok: true, value: cleanText(target.innerText || target.textContent || '') };
-}
-
-function actionGrep(p) {
-  const pattern = String(p.pattern || '');
+function actionGrep(p = {}) {
+  const pattern = String(p.pattern || p.query || p.text || '');
   if (!pattern) return { ok: false, error: 'grep requires pattern' };
   let regex;
-  try { regex = new RegExp(pattern, p.flags || 'i'); } catch (e) { return { ok: false, error: `invalid pattern: ${e.message}` }; }
+  try {
+    const flags = String(p.flags || 'i').replace(/[gy]/g, '') || 'i';
+    regex = new RegExp(pattern, flags);
+  } catch (e) {
+    return { ok: false, error: `invalid pattern: ${e.message}` };
+  }
   const source = p.over === 'interactive'
-    ? Array.from(document.querySelectorAll('[data-hermes-ref]')).map((n) => `${n.getAttribute('data-hermes-ref')} ${cleanText(n.textContent || n.getAttribute('aria-label') || '')}`).join('\n')
+    ? Array.from(document.querySelectorAll('[data-hermes-ref]')).map((node) => {
+        const ref = node.getAttribute('data-hermes-ref') || '';
+        const text = cleanText(node.textContent || node.value || node.getAttribute('aria-label') || '');
+        return `@${ref} ${text}`;
+      }).join('\n')
     : String(document.body?.innerText || '');
-  const matches = source.split('\n').filter((line) => regex.test(line)).slice(0, Math.min(Number(p.limit) || 50, 200));
+  const limit = Math.min(Math.max(Number(p.limit) || 50, 1), 200);
+  const matches = source.split('\n').filter((line) => regex.test(line)).slice(0, limit);
   return { ok: true, value: matches.length ? matches.join('\n') : 'no matches', count: matches.length };
 }
 
-function actionSetValue(p) {
-  const target = el(p.selector);
-  if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
-  dispatchInput(target, String(p.value ?? ''));
-  return { ok: true, value: 'set value' };
+function actionFocus(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.focus({ preventScroll: true });
+  return { ok: true, value: `focused ${selector}` };
 }
 
-function cleanText(s) { return String(s).replace(/\s+/g, ' ').trim(); }
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function actionHover(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  fireMouse(target, 'mouseover');
+  fireMouse(target, 'mouseenter');
+  fireMouse(target, 'mousemove');
+  return { ok: true, value: `hovered ${selector}` };
+}
+
+function actionSelectOption(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  if (!(target instanceof HTMLSelectElement)) return { ok: false, error: `${selector} is not a select element` };
+  const wanted = String(p.value ?? p.option ?? p.text ?? '');
+  const option = Array.from(target.options).find((o) => o.value === wanted || cleanText(o.textContent) === wanted);
+  if (!option) return { ok: false, error: `Option not found: ${wanted}` };
+  target.value = option.value;
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+  target.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, value: `selected ${cleanText(option.textContent) || option.value}` };
+}
+
+function actionGetImages(p = {}) {
+  const limit = Math.min(Math.max(Number(p.limit) || 40, 1), 100);
+  const images = Array.from(document.images || []).slice(0, limit).map((img, index) => ({
+    index,
+    src: img.currentSrc || img.src || '',
+    alt: img.alt || '',
+    width: img.naturalWidth || img.width || 0,
+    height: img.naturalHeight || img.height || 0,
+    ref: img.getAttribute('data-hermes-ref') ? `@${img.getAttribute('data-hermes-ref')}` : undefined
+  }));
+  return { ok: true, value: images, count: images.length };
+}
+
+function actionSnapshot() {
+  const interactive = Array.from(document.querySelectorAll('[data-hermes-ref]')).slice(0, 250).map((node) => ({
+    ref: `@${node.getAttribute('data-hermes-ref')}`,
+    tag: node.tagName.toLowerCase(),
+    role: node.getAttribute('role') || '',
+    text: cleanText(node.textContent || node.value || node.getAttribute('aria-label') || '').slice(0, 300)
+  }));
+  const text = String(document.body?.innerText || '').slice(0, OUTPUT_LIMIT);
+  return {
+    ok: true,
+    value: { url: location.href, title: document.title, text, interactive },
+    truncated: String(document.body?.innerText || '').length > OUTPUT_LIMIT
+  };
+}
+
+async function actionWait(p = {}) {
+  const requestedMs = Number(p.ms ?? p.timeout ?? DEFAULT_WAIT_MS);
+  const timeoutMs = Math.min(Math.max(Number.isFinite(requestedMs) ? requestedMs : DEFAULT_WAIT_MS, 1), MAX_WAIT_MS);
+  const selector = p.selector || p.element || p.ref;
+  const expectedText = String(p.text || '').trim();
+
+  if (!selector && !expectedText) {
+    await sleep(timeoutMs);
+    return { ok: true, value: `waited ${timeoutMs}ms` };
+  }
+
+  const matches = () => {
+    if (selector && !el(selector)) return false;
+    if (expectedText && !String(document.body?.innerText || '').includes(expectedText)) return false;
+    return true;
+  };
+  if (matches()) return { ok: true, value: selector ? `found ${selector}` : `found text: ${expectedText}` };
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const observer = new MutationObserver(() => {
+      if (matches()) finish({ ok: true, value: selector ? `found ${selector}` : `found text: ${expectedText}` });
+    });
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    const timer = setTimeout(() => finish({ ok: false, error: `wait timed out after ${timeoutMs}ms` }), timeoutMs);
+  });
+}
+
+function actionNavigate(p = {}) {
+  const url = String(p.url || p.href || '').trim();
+  if (!url) return { ok: false, error: 'navigate requires url' };
+  location.assign(url);
+  return { ok: true, value: `navigating to ${url}` };
+}
+
+function actionBack() {
+  history.back();
+  return { ok: true, value: 'navigating back' };
+}
+
+function actionForward() {
+  history.forward();
+  return { ok: true, value: 'navigating forward' };
+}
+
+function actionReload() {
+  location.reload();
+  return { ok: true, value: 'reloading page' };
+}
 
 /** Main dispatcher: run one action, return a normalized {ok, value|error}. */
 async function runAction(action) {
   if (!action || typeof action !== 'object') return { ok: false, error: 'no action' };
-  const name = String(action.name || action.action || '').replace(/^browser[:_-]?/, '');
+  const name = String(action.name || action.action || '').replace(/^browser[:_-]?/, '').toLowerCase();
   const p = action.params || action.payload || action.args || action;
   try {
     switch (name) {
       case 'click': return await actionClick(p);
       case 'fill': case 'input': case 'set_value': case 'setvalue': return await actionSetValue(p);
       case 'type': return await actionType(p);
-      case 'key': case 'keys': case 'keypress': return await actionKey(p);
+      case 'key': case 'keys': case 'keypress': case 'press': return await actionKey(p);
       case 'scroll': return actionScroll(p);
       case 'read': case 'get_text': case 'extract': return actionRead(p);
-      case 'grep': return actionGrep(p);
+      case 'grep': case 'search': return actionGrep(p);
       case 'focus': return actionFocus(p);
+      case 'hover': return await actionHover(p);
+      case 'select': case 'select_option': case 'selectoption': return actionSelectOption(p);
+      case 'get_images': case 'images': return actionGetImages(p);
+      case 'snapshot': return actionSnapshot();
       case 'wait': return await actionWait(p);
+      case 'navigate': case 'goto': case 'open': return actionNavigate(p);
+      case 'back': return actionBack();
+      case 'forward': return actionForward();
+      case 'reload': case 'refresh': return actionReload();
       default: return { ok: false, error: `Unknown action: ${name}` };
     }
   } catch (e) {
@@ -215,13 +356,13 @@ async function runAction(action) {
   }
 }
 
-/** Run a batch of actions sequentially, stopping on first failure if `stopOnError`. */
+/** Run a batch of actions sequentially, stopping on first failure by default. */
 async function runActions(actions, opts = {}) {
   const results = [];
-  for (const a of actions || []) {
-    const r = await runAction(a);
-    results.push(r);
-    if (!r.ok && opts.stopOnError !== false) break;
+  for (const action of actions || []) {
+    const result = await runAction(action);
+    results.push(result);
+    if (!result.ok && opts.stopOnError !== false) break;
   }
   return results;
 }
@@ -233,6 +374,6 @@ if (typeof globalThis !== 'undefined' && !globalThis.__AGUI_PAGE_ACTOR_LOADED__)
     runActions,
     _el: el,
     _dispatchInput: dispatchInput,
-    _cssPath: () => null
+    _refSelector: refSelector
   };
 }
