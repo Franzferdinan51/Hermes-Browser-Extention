@@ -1,9 +1,6 @@
 /**
- * self-test.mjs — verifies the bridge's Hermes -> AG-UI translation pipeline
- * without a live Hermes runtime. A fake Hermes WebUI serves login/session/chat
- * routes and records the prompt the bridge actually sent.
- *
- * Run: node self-test.mjs
+ * self-test.mjs — verifies Hermes -> AG-UI translation and bridge security
+ * without a live Hermes runtime.
  */
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -13,6 +10,7 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_PORT = 9997;
 const BRIDGE_PORT = 9988;
+const BRIDGE_TOKEN = 'bridge-test-token';
 
 let passed = 0;
 let failed = 0;
@@ -28,7 +26,6 @@ async function readJson(req) {
   try { return JSON.parse(body || '{}'); } catch { return {}; }
 }
 
-// ---- Fake Hermes ----
 const fake = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -57,7 +54,8 @@ const fake = http.createServer(async (req, res) => {
     emit('token', { text: 'Hello ' });
     emit('reasoning', { text: '(private reasoning should not be surfaced)' });
     emit('token', { text: 'from ' });
-    emit('tool_call', { tool_call_id: 't1', name: 'browser_read_page', args: { selector: 'body' } });
+    emit('tool_call', { tool_call_id: 't1', name: 'browser_click', args: { element: '@e1' } });
+    emit('tool_call', { tool_call_id: 't2', name: 'web_search', args: { query: 'example' } });
     emit('token', { text: 'Hermes!' });
     emit('done', {});
     res.end();
@@ -65,7 +63,10 @@ const fake = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && req.url.includes('/api/providers')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ providers: [{ id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model'] }], active_provider: 'lmstudio' }));
+    res.end(JSON.stringify({
+      providers: [{ id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model'] }],
+      active_provider: 'lmstudio'
+    }));
     return;
   }
   if (req.method === 'GET' && req.url.includes('/api/models')) {
@@ -73,17 +74,55 @@ const fake = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ active_provider: 'lmstudio', default_model: 'fake-model', groups: [] }));
     return;
   }
+  if (req.method === 'GET' && req.url.includes('/api/tools/toolsets')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([
+      {
+        name: 'browser',
+        label: 'Browser Automation',
+        description: 'Browser tools',
+        enabled: true,
+        configured: true,
+        tools: ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type']
+      },
+      {
+        name: 'web',
+        label: 'Web Search',
+        description: 'Web retrieval',
+        enabled: true,
+        configured: true,
+        tools: ['web_search', 'web_extract']
+      },
+      {
+        name: 'disabled-demo',
+        label: 'Disabled Demo',
+        enabled: false,
+        configured: true,
+        tools: ['disabled_tool']
+      }
+    ]));
+    return;
+  }
+  if (req.method === 'GET' && req.url.includes('/api/skills')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([
+      { name: 'browser-research', description: 'Research with browser context', enabled: true, usage: 4, provenance: 'agent' },
+      { name: 'disabled-skill', enabled: false, usage: 0, provenance: 'hub' }
+    ]));
+    return;
+  }
+
   res.writeHead(404);
   res.end('{}');
 });
 fake.listen(FAKE_PORT, '127.0.0.1');
 
-// ---- Spawn bridge pointed at fake ----
 const bridgeEnv = {
   ...process.env,
   PORT: String(BRIDGE_PORT),
   HERMES_URL: `http://127.0.0.1:${FAKE_PORT}`,
   HERMES_PASSWORD: 'secret',
+  BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN,
   MODEL: 'fake-model',
   MODEL_PROVIDER: 'lmstudio'
 };
@@ -96,28 +135,52 @@ child.stdout.on('data', (d) => { bridgeLog += d; });
 child.stderr.on('data', (d) => { bridgeLog += d; });
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const authHeaders = { Authorization: `Bearer ${BRIDGE_TOKEN}` };
 
 async function main() {
   await wait(700);
 
-  // 1. healthz
-  let hz;
-  try { hz = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`)).json(); }
-  catch (e) { hz = { error: e.message }; }
-  ok(hz.ok === true && hz.hermesOk === true, 'healthz reports Hermes reachable');
-  ok(hz.version === '0.2.0', 'healthz exposes bridge version');
+  // Security boundary.
+  const noAuth = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`);
+  ok(noAuth.status === 401, 'bridge token protects HTTP endpoints');
 
-  // 2. model discovery
+  const badOrigin = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`, {
+    headers: { ...authHeaders, Origin: 'https://evil.example' }
+  });
+  ok(badOrigin.status === 403, 'rejects non-extension browser origins');
+
+  // Health.
+  let hz;
+  try {
+    hz = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`, { headers: authHeaders })).json();
+  } catch (e) {
+    hz = { error: e.message };
+  }
+  ok(hz.ok === true && hz.hermesOk === true, 'healthz reports Hermes reachable');
+  ok(hz.version === '0.3.0' && hz.authRequired === true, 'healthz exposes secured bridge version');
+
+  // Model discovery.
   let models = {};
-  try { models = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/models`)).json(); } catch {}
+  try {
+    models = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/models`, { headers: authHeaders })).json();
+  } catch {}
   ok(models.data?.some((m) => m.id === '@lmstudio:fake-model'), 'model endpoint flattens configured Hermes provider');
 
-  // 3. POST /agent -> AG-UI SSE
+  // Hermes-native toolset + skill metadata.
+  let runtime = {};
+  try {
+    runtime = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/runtime`, { headers: authHeaders })).json();
+  } catch {}
+  ok(runtime.object === 'hermes.runtime', 'runtime endpoint identifies Hermes runtime payload');
+  ok(runtime.summary?.enabledToolsets === 2 && runtime.summary?.tools === 6, 'runtime summarizes enabled toolsets and tools');
+  ok(runtime.summary?.enabledSkills === 1 && runtime.skills?.[0]?.name === 'browser-research', 'runtime exposes Hermes skills and enabled count');
+
+  // AG-UI stream.
   let body = '';
   try {
     const r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({
         agentId: 'hermes',
         threadId: 'thread_t1',
@@ -142,25 +205,27 @@ async function main() {
   ok(body.includes('"MESSAGES_SNAPSHOT"'), 'emits MESSAGES_SNAPSHOT');
   ok(body.includes('"TEXT_MESSAGE_START"'), 'emits TEXT_MESSAGE_START');
   ok(body.includes('Hello ') && body.includes('Hermes!'), 'streams token deltas');
-  ok(body.includes('"TOOL_CALL_START"') && body.includes('browser_read_page'), 'translates Hermes tool_call into TOOL_CALL events');
+  ok(body.includes('"TOOL_CALL_START"') && body.includes('browser_click') && body.includes('web_search'), 'renders Hermes browser and non-browser tool calls');
   ok(body.includes('"kind":"context-status"'), 'surfaces context status as CUSTOM metadata');
   ok(body.includes('"kind":"metering"'), 'surfaces metering as CUSTOM metadata');
   ok(body.includes('"phase":"reasoning"'), 'surfaces reasoning lifecycle without raw reasoning');
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
-  ok(body.includes('No Hermes Browser companion is connected'), 'browser tool fails fast when no companion is connected');
+  ok(body.includes('No Hermes Browser companion is connected'), 'mirrorable browser tool fails fast with no companion');
+  ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 
-  // 4. Critical prompt contract: the actual user request must reach Hermes.
+  // Prompt contract.
   const sentMessage = String(lastChatStartPayload?.message || '');
   ok(sentMessage.includes('[USER]\nsummarize this page'), 'Hermes prompt includes current user message');
   ok(sentMessage.includes('[PAGE CONTEXT]') && sentMessage.includes('https://example.com'), 'Hermes prompt includes page context');
-  ok(sentMessage.includes('browser_click') && sentMessage.includes('@e1'), 'Hermes prompt advertises browser tools and accessibility refs');
+  ok(sentMessage.includes('browser_click(@eN)') && sentMessage.includes('browser_console()') && sentMessage.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
+  ok(!sentMessage.includes('browser_hover(') && !sentMessage.includes('browser_wait('), 'prompt does not advertise extension-only helpers as Hermes tools');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   child.kill();
   fake.close();
   if (failed) {
-    console.log('\n--- bridge log ---\n' + bridgeLog.slice(-2500));
+    console.log('\n--- bridge log ---\n' + bridgeLog.slice(-3000));
     process.exit(1);
   }
   process.exit(0);
