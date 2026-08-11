@@ -1,0 +1,53 @@
+name: Hermes Browser CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            bridge/package-lock.json
+            test/package-lock.json
+
+      - name: Install bridge dependencies
+        working-directory: bridge
+        run: npm ci
+
+      - name: Bridge self-test
+        working-directory: bridge
+        run: npm test
+
+      - name: Install extension test dependencies
+        working-directory: test
+        run: npm ci
+
+      - name: Page reader and actor unit tests
+        working-directory: test
+        run: npm test
+
+      - name: Syntax check extension modules
+        run: |
+          node --check extension/lib/agui-client.js
+          node --check extension/lib/background.js
+          node --check extension/lib/content.js
+          node --check extension/lib/page-actor.js
+          node --check extension/lib/page-reader.js
+          node --check extension/ui/panel.js
+          node --check extension/ui/options.js
+          node --check extension/ui/popup.js
