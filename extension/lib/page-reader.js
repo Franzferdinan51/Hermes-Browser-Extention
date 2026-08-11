@@ -55,7 +55,10 @@ function collectInteractive(root = document) {
     seen.add(el);
     let sel = '';
     try { sel = cssPath(el); } catch { sel = ''; }
+    const ref = `e${out.length + 1}`;
+    try { el.setAttribute('data-hermes-ref', ref); } catch {}
     out.push({
+      ref,
       tag: el.tagName.toLowerCase(),
       selector: sel,
       id: el.id || '',
@@ -72,6 +75,21 @@ function collectInteractive(root = document) {
 
   (q('a,button,input,select,textarea,summary,details,[role="button"],[role="link"],[contenteditable="true"]', 2000)).forEach(push);
   return out;
+}
+
+// Compact accessibility-style view inspired by BrowserOS snapshots. Refs are
+// regenerated on each snapshot because page mutations invalidate them.
+function buildAccessibilityTree(root = document) {
+  const lines = [];
+  const nodes = root.querySelectorAll('h1,h2,h3,a,button,input,select,textarea,[role="button"],[role="link"]');
+  for (const node of nodes) {
+    if (!isVisible(node)) continue;
+    const ref = node.getAttribute('data-hermes-ref') || '';
+    const role = node.getAttribute('role') || ({ A: 'link', BUTTON: 'button', INPUT: 'textbox', SELECT: 'combobox', TEXTAREA: 'textbox' }[node.tagName] || node.tagName.toLowerCase());
+    const label = cleanText(node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.textContent || node.value || '').slice(0, 180);
+    lines.push(`[${ref}] ${role}${label ? `: ${label}` : ''}`);
+  }
+  return lines.join('\n');
 }
 
 /** A compact CSS path for an element (best-effort, id or nth-of-type chain). */
@@ -165,6 +183,7 @@ function readPage() {
   const root = document;
   const s = summary(root);
   const interactive = collectInteractive(root);
+  const accessibility = buildAccessibilityTree(root);
   const dom = buildDomText(root.body, 0, { used: 0 });
 
   const snapshot = {
@@ -174,6 +193,7 @@ function readPage() {
     charset: document.characterSet || '',
     summary: s,
     interactive,
+    accessibility,
     dom,
     capturedAt: Date.now()
   };

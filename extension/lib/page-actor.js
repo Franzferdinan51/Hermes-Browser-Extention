@@ -24,6 +24,11 @@ const BASE_SELECTOR_LIMIT = 50;
 
 function el(selector, root = document) {
   if (selector instanceof Element) return selector;
+  const ref = String(selector || '').match(/^e\d+$/i);
+  if (ref) {
+    const byRef = root.querySelector(`[data-hermes-ref="${ref[0]}"]`);
+    if (byRef) return byRef;
+  }
   try {
     const found = root.querySelector(selector);
     if (found) return found;
@@ -165,6 +170,18 @@ function actionExtract(p) {
   return { ok: true, value: cleanText(target.innerText || target.textContent || '') };
 }
 
+function actionGrep(p) {
+  const pattern = String(p.pattern || '');
+  if (!pattern) return { ok: false, error: 'grep requires pattern' };
+  let regex;
+  try { regex = new RegExp(pattern, p.flags || 'i'); } catch (e) { return { ok: false, error: `invalid pattern: ${e.message}` }; }
+  const source = p.over === 'interactive'
+    ? Array.from(document.querySelectorAll('[data-hermes-ref]')).map((n) => `${n.getAttribute('data-hermes-ref')} ${cleanText(n.textContent || n.getAttribute('aria-label') || '')}`).join('\n')
+    : String(document.body?.innerText || '');
+  const matches = source.split('\n').filter((line) => regex.test(line)).slice(0, Math.min(Number(p.limit) || 50, 200));
+  return { ok: true, value: matches.length ? matches.join('\n') : 'no matches', count: matches.length };
+}
+
 function actionSetValue(p) {
   const target = el(p.selector);
   if (!target) return { ok: false, error: `Element not found: ${p.selector}` };
@@ -188,6 +205,7 @@ async function runAction(action) {
       case 'key': case 'keys': case 'keypress': return await actionKey(p);
       case 'scroll': return actionScroll(p);
       case 'read': case 'get_text': case 'extract': return actionRead(p);
+      case 'grep': return actionGrep(p);
       case 'focus': return actionFocus(p);
       case 'wait': return await actionWait(p);
       default: return { ok: false, error: `Unknown action: ${name}` };

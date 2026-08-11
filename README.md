@@ -5,12 +5,13 @@ Connect **Hermes Agent** (Nous Research) to your Chrome browser over the **AG-UI
 Scaffolded from / inspired by:
 - **Hermes Agent** — https://github.com/NousResearch/hermes-agent (MIT)
 - **AG-UI** (Agent-User Interaction Protocol) — https://github.com/ag-ui-protocol/ag-ui (MIT)
+- **BrowserOS** — https://github.com/browseros-ai/BrowserOS (AGPL-3.0; ideas reviewed, no BrowserOS source copied)
 
 ---
 
 ## What it does
 
-- **Reads the page** — a content script turns any page's DOM into an agent-readable snapshot (text, headings, links, forms, inputs, an interaction map of selectors with current values), which is attached to your messages as AG-UI `context`.
+- **Reads the page** — a content script turns any page's DOM into an agent-readable snapshot (text, headings, links, forms, inputs, an accessibility-style tree with stable `eN` refs, and an interaction map with current values), which is attached to your messages as AG-UI `context`.
 - **Talks to Hermes** — a tiny local Node bridge (`bridge/`) exposes Hermes as an AG-UI-compatible agent endpoint (`POST /agent` -> `text/event-stream`). It logs into Hermes's WebUI REST API and streams responses as AG-UI protocol events (`RUN_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `RUN_FINISHED`).
 - **Acts on the page** — when Hermes emits a browser tool call (click / fill / type / scroll / read / navigate), the bridge forwards it to the extension over WebSocket, the extension executes it against the active tab via a page-actor module, and the result is fed back to Hermes for its next step.
 - **Streams in real time** — a docked **side panel** renders the live AG-UI event stream (streaming text + tool timeline). A toolbar **popup** gives quick chat + connection status. An **options** page wires the bridge URL, Hermes model, and workspace with a live health check.
@@ -87,7 +88,10 @@ The bridge injects these into Hermes's context and forwards them to the page:
 - `browser_fill(selector, value)` / `browser_type(selector, text)` — enter text
 - `browser_scroll(direction, amount)` — scroll
 - `browser_extract(selector, prop)` — read a value or text
+- `browser_grep(pattern, over, limit)` — search visible content or the accessibility refs without dumping the full page
 - `browser_navigate(url)` — go to a URL
+
+The page-control loop follows BrowserOS's useful **snapshot → act → verify** pattern: refs are used for actions, and page mutations require a fresh snapshot.
 
 ## Security notes
 

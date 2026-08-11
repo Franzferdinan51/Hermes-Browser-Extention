@@ -216,6 +216,7 @@ async function runAgent(threadId, runId, input, res) {
 /** Convert a Hermes tool name + args into a page-actor action for the extension. */
 function normalizeBrowserTool(name, args = {}) {
   const n = name.toLowerCase();
+  if (/grep|search/.test(n)) return { name: 'grep', params: { pattern: args.pattern || args.query || args.text, over: args.over, limit: args.limit } };
   if (/read|snapshot|extract|page/.test(n)) {
     return { name: 'read', params: { selector: args.selector, prop: args.prop } };
   }
@@ -236,7 +237,8 @@ function buildHermesPrompt(input) {
       if (ctx.type === 'page_context' || ctx.document) {
         parts.push(
           `[PAGE CONTEXT]\nURL: ${ctx.url || ''}\nTITLE: ${ctx.title || ''}\n\n${ctx.document}\n` +
-          (ctx.interactive ? `\n[INTERACTIVE ELEMENTS]\n${ctx.interactive.map((i) => `- ${i.selector} (${i.tag}) ${i.text || i.value || i.placeholder || ''}`).join('\n')}\n` : '')
+          (ctx.accessibility ? `\n[ACCESSIBILITY SNAPSHOT]\n${ctx.accessibility}\n` : '') +
+          (ctx.interactive ? `\n[INTERACTIVE ELEMENTS]\n${ctx.interactive.map((i) => `- ${i.ref || ''} ${i.selector || ''} (${i.tag}) ${i.text || i.value || i.placeholder || ''}`).join('\n')}\n` : '')
         );
       } else {
         parts.push(`[CONTEXT ${ctx.type || 'context'}]\n${JSON.stringify(ctx)}`);
@@ -257,7 +259,7 @@ function buildHermesPrompt(input) {
   const tools = [
     'browser_read_page', 'browser_click(selector)', 'browser_fill(selector,value)',
     'browser_type(selector,text)', 'browser_scroll(direction,amount)', 'browser_extract(selector,prop)',
-    'browser_navigate(url)'
+    'browser_grep(pattern,over,limit)', 'browser_navigate(url)'
   ];
   parts.push(`[AVAILABLE BROWSER TOOLS]\n${tools.join('\n')}\n\nUse these tools to read and control the page the user is viewing. Prefer them over guessing. When a tool call is needed, emit it in the stream with name + JSON args.`);
 

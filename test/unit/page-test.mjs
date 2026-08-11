@@ -160,11 +160,19 @@ ok(!!btn, 'interactive map exposes the Buy Now button');
 const hidden = snap.interactive.find((i) => i.text.includes('Hidden Button'));
 ok(!hidden, 'hidden element is excluded from interactive map');
 ok(typeof snap.dom === 'string' && snap.dom.length > 0, 'buildDomText produces a DOM string');
+const refButton = snap.interactive.find((i) => i.text.includes('Buy Now'));
+ok(/^e\d+$/.test(refButton?.ref || '') && String(snap.accessibility).includes(`[${refButton.ref}]`), 'accessibility snapshot exposes stable element refs');
 
 // ---- Tests: page actor ----
 async function drive() {
   const clickRes = await actor.runAction({ name: 'click', params: { selector: 'Buy Now' } });
   ok(clickRes.ok, 'actor clicks button by text fallback');
+
+  const refClick = await actor.runAction({ name: 'click', params: { selector: refButton.ref } });
+  ok(refClick.ok, 'actor clicks BrowserOS-style eN ref');
+
+  const grepRes = await actor.runAction({ name: 'grep', params: { pattern: 'paragraph text' } });
+  ok(grepRes.ok && grepRes.count >= 1 && String(grepRes.value).includes('paragraph text'), 'actor greps visible page content');
 
   const fillRes = await actor.runAction({ name: 'fill', params: { selector: '#q', value: 'hello world' } });
   ok(fillRes.ok && document.getElementById('q').value === 'hello world', 'actor fills input by id selector');
