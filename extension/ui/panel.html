@@ -19,8 +19,31 @@
     <button id="btnSnapshot" class="mini">snapshot</button>
   </section>
 
+  <section class="runtimebar">
+    <details id="runtimeDetails" class="runtime-details">
+      <summary>
+        <span class="runtime-title">Hermes runtime</span>
+        <span id="runtimeSummary" class="runtime-summary">loading…</span>
+      </summary>
+      <div class="runtime-content">
+        <div class="runtime-section-head">
+          <strong>Enabled toolsets</strong>
+          <button id="refreshRuntime" class="runtime-refresh" type="button" title="Refresh Hermes runtime">↻</button>
+        </div>
+        <div id="runtimeToolsets" class="runtime-chips"><span class="muted">Not loaded yet.</span></div>
+
+        <div class="runtime-section-head runtime-skills-head">
+          <strong>Enabled skills</strong>
+          <span id="runtimeSkillCount" class="muted"></span>
+        </div>
+        <div id="runtimeSkills" class="runtime-chips"><span class="muted">Not loaded yet.</span></div>
+        <div id="runtimeErrors" class="runtime-errors" hidden></div>
+      </div>
+    </details>
+  </section>
+
   <main class="chat" id="chat">
-    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and, when enabled, act on it.</div>
+    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and, when enabled, mirror compatible Hermes browser actions into the active tab.</div>
   </main>
 
   <footer class="composer">
