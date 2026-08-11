@@ -1,6 +1,5 @@
-// panel.js — full side panel client. Renders AG-UI event stream, page
-// snapshot info, and tool-call timeline. Keeps an open port to the SW so the
-// service worker stays alive during a run and hears live events.
+// panel.js — full side panel client. Renders AG-UI events, page context,
+// tool calls, and a searchable model picker.
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
 const emptyEl = $('empty');
@@ -8,8 +7,10 @@ const emptyEl = $('empty');
 let port = null;
 let busy = false;
 let config = null;
+let allModels = [];
+let selectedModelId = '';
+let selectedProvider = '';
 
-// ---- render helpers ----
 function addEl(cls, text) {
   emptyEl.style.display = 'none';
   const d = document.createElement('div');
@@ -32,15 +33,13 @@ function openAssistant() {
   return { el: d, caret };
 }
 
-let currentStream = null;   // {el, caret}
-let currentTool = null;     // {el, argsEl}
+let currentStream = null;
+let currentTool = null;
 
 function appendStream(text) {
   if (!currentStream) currentStream = openAssistant();
-  // remove caret, append text, re-add caret
   if (currentStream.caret.parentNode) currentStream.caret.parentNode.removeChild(currentStream.caret);
   currentStream.el.textContent += text;
-  // Re-append caret only while streaming (we keep it, and strip on finalize)
   currentStream.el.appendChild(currentStream.caret);
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -69,8 +68,7 @@ function openTool(name) {
 }
 
 function appendToolArgs(delta) {
-  if (!currentTool) return;
-  if (currentTool.el.classList.contains('pending')) return;
+  if (!currentTool || currentTool.el.classList.contains('pending')) return;
   currentTool.argsEl.textContent += delta || '';
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -87,8 +85,7 @@ function finalizeTool(resultOk, resultText) {
   currentTool = null;
 }
 
-// ---- AG-UI event rendering ----
-const THROTTLE = 24; // ms batching for fast streams
+const THROTTLE = 24;
 let pendingText = '';
 let textTimer = null;
 function queueText(delta) {
@@ -110,6 +107,12 @@ function showError(text) {
   setTimeout(() => { if (lastRenderedError === normalized) lastRenderedError = ''; }, 1500);
 }
 
+function toolNameFromEvent(e) {
+  if (e.name || e.toolName) return e.name || e.toolName;
+  if (!e.args) return 'tool';
+  try { return JSON.parse(e.args).name || 'tool'; } catch { return 'tool'; }
+}
+
 function handleEvent(e) {
   const t = e.type;
   switch (t) {
@@ -118,10 +121,10 @@ function handleEvent(e) {
       $('runInfo').textContent = 'running…';
       break;
     case 'TEXT_MESSAGE_START':
-    case 'TEXT_MESSAGE_CHUNK':
-      currentStream = openAssistant();
+      if (!currentStream) currentStream = openAssistant();
       if (e.delta) queueText(e.delta);
       break;
+    case 'TEXT_MESSAGE_CHUNK':
     case 'TEXT_MESSAGE_CONTENT':
       if (e.delta) queueText(e.delta);
       break;
@@ -130,7 +133,7 @@ function handleEvent(e) {
       finalizeStream();
       break;
     case 'TOOL_CALL_START':
-      openTool(e.name || e.toolName || (e.args && JSON.parse(e.args || '{}').name) || 'tool');
+      openTool(toolNameFromEvent(e));
       break;
     case 'TOOL_CALL_ARGS':
       appendToolArgs(e.delta || '');
@@ -139,15 +142,12 @@ function handleEvent(e) {
       if (e.args) appendToolArgs(e.args);
       break;
     case 'TOOL_CALL_END':
-      // tool done — result arrives via separate result message
       break;
-    // Tool result notification (bridge -> extension -> panel)
     case 'tool-result':
       finalizeTool(e.ok, e.value || e.error);
       break;
     case 'STATE_SNAPSHOT':
     case 'MESSAGES_SNAPSHOT':
-      // optionally render compactly
       break;
     case 'RUN_FINISHED':
       flushText();
@@ -173,32 +173,33 @@ function handleEvent(e) {
 }
 
 function flushText() {
-  if (pendingText && textTimer) { clearTimeout(textTimer); textTimer = null; appendStream(pendingText); pendingText = ''; }
+  if (pendingText) {
+    if (textTimer) clearTimeout(textTimer);
+    textTimer = null;
+    appendStream(pendingText);
+    pendingText = '';
+  }
 }
 
-// ---- status ----
 function setStatus(state) {
   const el = $('phStatus');
   el.className = 'ph-status ' + state;
   el.title = state;
 }
 
-// ---- port to SW for live events ----
 function connectPort() {
   try { port = chrome.runtime.connect({ name: 'panel' }); } catch { return; }
   port.onMessage.addListener((m) => {
     if (m.kind === 'event' && m.event) handleEvent(m.event);
-    else if (m.kind === 'state') {
-      setStatus(m.clientBusy ? 'busy' : 'ok');
-    } else if (m.kind === 'run-start') { busy = true; }
-    else if (m.kind === 'run-end') { busy = false; }
-    else if (m.kind === 'page-snapshot' && m.snapshot) updatePageBar(m.snapshot);
+    else if (m.kind === 'state') setStatus(m.clientBusy ? 'busy' : 'ok');
+    else if (m.kind === 'run-start') busy = true;
+    else if (m.kind === 'run-end') busy = false;
+    else if (m.kind === 'page-snapshot' && m.snapshot) updatePageBar();
   });
   port.onDisconnect.addListener(() => { port = null; });
   port.postMessage({ kind: 'hello' });
 }
 
-// ---- page snapshot ----
 async function updatePageBar() {
   const r = await chrome.runtime.sendMessage({ kind: 'get-state' }).catch(() => null);
   const snap = r && r.snapshot;
@@ -213,63 +214,106 @@ async function snapshotNow() {
   if (r && r.ok) updatePageBar();
 }
 
-async function loadModels(selected, selectedProvider) {
+function normalizeModel(m) {
+  if (typeof m === 'string') return { id: m, label: m, provider: '', providerLabel: '' };
+  return {
+    ...m,
+    id: String(m.id || m.model || m.name || ''),
+    label: String(m.label || m.display_name || m.id || m.model || m.name || ''),
+    provider: String(m.provider || m.provider_id || ''),
+    providerLabel: String(m.providerLabel || m.provider_label || m.provider || '')
+  };
+}
+
+function providerName(m) { return m.providerLabel || m.provider || 'Models'; }
+
+function renderModels() {
   const select = $('modelSelect');
-  select.innerHTML = '<option>Loading models…</option>';
-  const r = await chrome.runtime.sendMessage({ kind: 'get-models' }).catch(() => null);
-  const models = r && r.ok ? (r.data || []) : [];
-  if (!models.length) {
-    select.innerHTML = '<option value="qwen3.5-9b">qwen3.5-9b</option>';
-    select.value = selected || 'qwen3.5-9b';
+  const filter = $('modelFilter').value.trim().toLowerCase();
+  const visible = allModels.filter((m) => !filter || `${m.id} ${m.label} ${m.provider} ${m.providerLabel}`.toLowerCase().includes(filter));
+  $('modelCount').textContent = `${visible.length}/${allModels.length}`;
+  select.innerHTML = '';
+
+  if (!visible.length) {
+    const option = document.createElement('option');
+    option.disabled = true;
+    option.textContent = 'No matching models';
+    select.appendChild(option);
     return;
   }
+
   const groups = new Map();
-  for (const m of models) {
-    const key = m.providerLabel || m.provider || 'Models';
+  for (const m of visible) {
+    const key = providerName(m);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(m);
   }
-  select.innerHTML = '';
+
   for (const [group, entries] of groups) {
     const optgroup = document.createElement('optgroup');
     optgroup.label = group;
-    for (const m of entries) {
+    for (const m of entries.sort((a, b) => a.label.localeCompare(b.label))) {
       const option = document.createElement('option');
       option.value = m.id;
       option.dataset.provider = m.provider || '';
       option.textContent = m.label || m.id;
+      if (m.id === selectedModelId && (!selectedProvider || m.provider === selectedProvider)) option.selected = true;
       optgroup.appendChild(option);
     }
     select.appendChild(optgroup);
   }
-  const match = [...select.options].find((o) => o.value === selected && (!selectedProvider || o.dataset.provider === selectedProvider));
-  select.value = match ? match.value : (r.default_model || select.options[0]?.value || '');
+
+  if (!select.value && select.options[0]) select.selectedIndex = 0;
+}
+
+async function loadModels(selected, provider) {
+  selectedModelId = selected || selectedModelId;
+  selectedProvider = provider || selectedProvider;
+  $('modelSelect').innerHTML = '<option>Loading models…</option>';
+  $('modelCount').textContent = '…';
+  const r = await chrome.runtime.sendMessage({ kind: 'get-models' }).catch(() => null);
+  const raw = r && r.ok ? (r.data || []) : [];
+  allModels = raw.map(normalizeModel).filter((m) => m.id);
+  if (!allModels.length) {
+    allModels = [normalizeModel({ id: selectedModelId || 'qwen3.5-9b', provider: selectedProvider || 'lmstudio' })];
+  } else if (!selectedModelId && r.default_model) {
+    selectedModelId = r.default_model;
+  }
+  renderModels();
 }
 
 async function chooseModel() {
   const option = $('modelSelect').selectedOptions[0];
   if (!option?.value) return;
+  selectedModelId = option.value;
+  selectedProvider = option.dataset.provider || config?.modelProvider || '';
   await chrome.runtime.sendMessage({ kind: 'set-config', patch: {
-    model: option.value,
-    modelProvider: option.dataset.provider || config?.modelProvider || ''
+    model: selectedModelId,
+    modelProvider: selectedProvider
   }});
-  config = { ...(config || {}), model: option.value, modelProvider: option.dataset.provider || config?.modelProvider || '' };
+  config = { ...(config || {}), model: selectedModelId, modelProvider: selectedProvider };
   $('runInfo').textContent = 'model saved';
   setTimeout(() => { if (!busy) $('runInfo').textContent = ''; }, 1200);
 }
 
-// ---- send ----
 async function send() {
   const text = $('prompt').value.trim();
   if (!text || busy) return;
   $('prompt').value = '';
+  autoGrow();
   emptyEl.style.display = 'none';
   busy = true;
   addEl('user', text);
   setStatus('busy');
   $('runInfo').textContent = 'running…';
   try {
-    const response = await chrome.runtime.sendMessage({ kind: 'chat', text, attachPage: $('autoSnap').checked });
+    const response = await chrome.runtime.sendMessage({
+      kind: 'chat',
+      text,
+      attachPage: $('autoSnap').checked,
+      model: selectedModelId || config?.model || '',
+      modelProvider: selectedProvider || config?.modelProvider || ''
+    });
     if (response && !response.ok) throw new Error(response.error || 'Chat request failed');
   } catch (e) {
     showError(e);
@@ -279,7 +323,6 @@ async function send() {
   busy = false;
 }
 
-// ---- init ----
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -293,23 +336,27 @@ function autoGrow() {
 $('btnSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('btnClear').addEventListener('click', async () => {
   chatEl.innerHTML = '';
+  chatEl.appendChild(emptyEl);
   emptyEl.style.display = '';
   currentStream = currentTool = null;
   await chrome.runtime.sendMessage({ kind: 'clear-thread' });
 });
 $('btnSnapshot').addEventListener('click', snapshotNow);
+$('modelSelect').addEventListener('change', chooseModel);
+$('modelFilter').addEventListener('input', renderModels);
+$('refreshModels').addEventListener('click', () => loadModels(selectedModelId || config?.model, selectedProvider || config?.modelProvider));
 
 (async () => {
   const r = await chrome.runtime.sendMessage({ kind: 'get-config' }).catch(() => null);
   if (r && r.ok) {
     config = r.config;
+    selectedModelId = config.model || '';
+    selectedProvider = config.modelProvider || '';
     $('autoSnap').checked = config.attachPageContext !== false;
-    await loadModels(config.model, config.modelProvider);
+    await loadModels(selectedModelId, selectedProvider);
   }
 })();
 
-$('modelSelect').addEventListener('change', chooseModel);
-$('refreshModels').addEventListener('click', () => loadModels(config?.model, config?.modelProvider));
 connectPort();
 updatePageBar();
 console.log('[HermesPanel] ready');
