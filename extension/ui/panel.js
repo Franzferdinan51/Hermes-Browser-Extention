@@ -280,6 +280,7 @@ function autoGrow() {
   t.style.height = 'auto';
   t.style.height = Math.min(t.scrollHeight, 140) + 'px';
 }
+$('btnSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('btnClear').addEventListener('click', async () => {
   chatEl.innerHTML = '';
   emptyEl.style.display = '';
