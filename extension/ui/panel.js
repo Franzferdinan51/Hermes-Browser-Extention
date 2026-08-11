@@ -1,5 +1,5 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
-// browser tool calls/results, page context, and searchable model discovery.
+// browser tool calls/results, page context, Hermes toolsets/skills, and models.
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
 const emptyEl = $('empty');
@@ -12,6 +12,7 @@ let selectedModelId = '';
 let selectedProvider = '';
 let bridgeConnected = false;
 let currentStream = null;
+let runtimeData = null;
 const toolCards = new Map();
 
 function scrollChat() {
@@ -28,6 +29,9 @@ function addEl(cls, text) {
   return d;
 }
 
+// ---------------------------------------------------------------------------
+// Safe lightweight response rendering
+// ---------------------------------------------------------------------------
 function appendInline(parent, text) {
   const source = String(text || '');
   const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/g;
@@ -71,9 +75,7 @@ function renderRichText(container, text) {
   let codeLanguage = '';
   let list = null;
 
-  const flushList = () => {
-    list = null;
-  };
+  const flushList = () => { list = null; };
   const flushCode = () => {
     const pre = document.createElement('pre');
     pre.className = 'md-code';
@@ -144,7 +146,6 @@ function openAssistant() {
   emptyEl.style.display = 'none';
   const d = document.createElement('div');
   d.className = 'msg assistant streaming';
-
   const body = document.createElement('div');
   body.className = 'assistant-body';
   const caret = document.createElement('span');
@@ -198,6 +199,9 @@ function finalizeStream() {
   currentStream = null;
 }
 
+// ---------------------------------------------------------------------------
+// Tool timeline
+// ---------------------------------------------------------------------------
 function prettyValue(value) {
   if (value == null || value === '') return '';
   if (typeof value === 'string') return value;
@@ -305,6 +309,9 @@ function toolNameFromEvent(e) {
   try { return JSON.parse(e.args).name || 'tool'; } catch { return 'tool'; }
 }
 
+// ---------------------------------------------------------------------------
+// Runtime/status
+// ---------------------------------------------------------------------------
 function runLabel(label) {
   $('runInfo').textContent = label || '';
 }
@@ -325,6 +332,85 @@ function meteringLabel(data = {}) {
   const output = Number(data.output_tokens ?? data.outputTokens);
   if (Number.isFinite(input) || Number.isFinite(output)) return `${(input || 0) + (output || 0)} tokens`;
   return '';
+}
+
+function runtimeChip(text, title = '', state = '') {
+  const chip = document.createElement('span');
+  chip.className = `runtime-chip${state ? ` ${state}` : ''}`;
+  chip.textContent = text;
+  if (title) chip.title = title;
+  return chip;
+}
+
+function renderRuntime(runtime) {
+  if (!runtime) return;
+  runtimeData = runtime;
+  const toolsets = Array.isArray(runtime.toolsets) ? runtime.toolsets : [];
+  const skills = Array.isArray(runtime.skills) ? runtime.skills : [];
+  const enabledToolsets = toolsets.filter((row) => row?.enabled !== false);
+  const enabledSkills = skills.filter((row) => row?.enabled !== false);
+  const summary = runtime.summary || {};
+  const toolCount = Number.isFinite(Number(summary.tools))
+    ? Number(summary.tools)
+    : enabledToolsets.reduce((sum, row) => sum + (Array.isArray(row?.tools) ? row.tools.length : 0), 0);
+
+  $('runtimeSummary').textContent = `${enabledToolsets.length} sets · ${toolCount} tools · ${enabledSkills.length} skills`;
+  $('runtimeSkillCount').textContent = enabledSkills.length ? `${enabledSkills.length} enabled` : 'none';
+
+  const toolsetRoot = $('runtimeToolsets');
+  toolsetRoot.textContent = '';
+  if (!enabledToolsets.length) {
+    toolsetRoot.appendChild(runtimeChip('No enabled toolsets', '', 'warn'));
+  } else {
+    for (const row of enabledToolsets.sort((a, b) => String(a.label || a.name).localeCompare(String(b.label || b.name)))) {
+      const tools = Array.isArray(row.tools) ? row.tools : [];
+      const label = row.label || row.name || 'toolset';
+      const configured = row.configured === false ? ' · needs configuration' : '';
+      const title = `${row.description || row.name || label}\n${tools.length} tools${configured}${tools.length ? `\n\n${tools.join('\n')}` : ''}`;
+      toolsetRoot.appendChild(runtimeChip(`${label} · ${tools.length}`, title, row.configured === false ? 'warn' : 'ok'));
+    }
+  }
+
+  const skillRoot = $('runtimeSkills');
+  skillRoot.textContent = '';
+  if (!enabledSkills.length) {
+    skillRoot.appendChild(runtimeChip('No enabled skills', '', 'warn'));
+  } else {
+    const sortedSkills = enabledSkills.sort((a, b) => {
+      const au = Number(a.usage || 0);
+      const bu = Number(b.usage || 0);
+      return bu - au || String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    for (const skill of sortedSkills.slice(0, 60)) {
+      const provenance = skill.provenance ? ` · ${skill.provenance}` : '';
+      const usage = Number(skill.usage || 0) > 0 ? ` · used ${Number(skill.usage).toLocaleString()}` : '';
+      skillRoot.appendChild(runtimeChip(skill.name || 'skill', `${skill.description || skill.name || 'Hermes skill'}${provenance}${usage}`, skill.provenance === 'agent' ? 'agent' : ''));
+    }
+    if (sortedSkills.length > 60) skillRoot.appendChild(runtimeChip(`+${sortedSkills.length - 60} more`, 'Additional enabled skills are hidden from this compact view.'));
+  }
+
+  const errors = Array.isArray(runtime.errors) ? runtime.errors : [];
+  const errorRoot = $('runtimeErrors');
+  if (errors.length) {
+    errorRoot.hidden = false;
+    errorRoot.textContent = errors.map((e) => `${e.resource || 'runtime'}: ${e.error || 'unavailable'}`).join('\n');
+  } else {
+    errorRoot.hidden = true;
+    errorRoot.textContent = '';
+  }
+}
+
+async function loadRuntime(refresh = false) {
+  $('runtimeSummary').textContent = refresh ? 'refreshing…' : 'loading…';
+  const response = await chrome.runtime.sendMessage({ kind: 'get-runtime', refresh }).catch(() => null);
+  if (response?.ok) {
+    renderRuntime(response);
+    return;
+  }
+  $('runtimeSummary').textContent = 'unavailable';
+  const errorRoot = $('runtimeErrors');
+  errorRoot.hidden = false;
+  errorRoot.textContent = response?.error || 'Hermes runtime metadata is unavailable on this bridge/runtime.';
 }
 
 function handleCustom(e) {
@@ -418,7 +504,11 @@ function handleEvent(e) {
 function setStatus(state) {
   const el = $('phStatus');
   el.className = 'ph-status ' + state;
-  el.title = state === 'ok' ? 'Hermes bridge connected' : state === 'busy' ? 'Hermes is working' : 'Hermes bridge unavailable';
+  el.title = state === 'ok'
+    ? 'Hermes bridge connected'
+    : state === 'busy'
+      ? 'Hermes is working'
+      : 'Hermes bridge unavailable';
 }
 
 function connectPort() {
@@ -428,6 +518,7 @@ function connectPort() {
     else if (m.kind === 'state') {
       bridgeConnected = Boolean(m.bridgeConnected);
       setStatus(m.clientBusy ? 'busy' : bridgeConnected ? 'ok' : 'err');
+      if (m.runtime) renderRuntime(m.runtime);
     } else if (m.kind === 'run-start') {
       busy = true;
     } else if (m.kind === 'run-end') {
@@ -437,8 +528,11 @@ function connectPort() {
     } else if (m.kind === 'bridge-status') {
       bridgeConnected = Boolean(m.connected);
       if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
+      if (bridgeConnected && !runtimeData) loadRuntime().catch(() => {});
     } else if (m.kind === 'agent-state' && m.phase && busy) {
       if (m.phase === 'running') runLabel('Thinking…');
+    } else if (m.kind === 'runtime' && m.runtime) {
+      renderRuntime(m.runtime);
     }
   });
   port.onDisconnect.addListener(() => {
@@ -455,6 +549,7 @@ async function updatePageBar() {
   if (r) {
     bridgeConnected = Boolean(r.bridgeConnected);
     if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
+    if (r.runtime) renderRuntime(r.runtime);
   }
   if (snap) {
     $('pageTitle').textContent = snap.snapshot?.title || snap.title || snap.url || '—';
@@ -474,6 +569,9 @@ async function snapshotNow() {
   setTimeout(() => { if (!busy) runLabel(''); }, 1200);
 }
 
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
 function normalizeModel(m) {
   if (typeof m === 'string') return { id: m, label: m, provider: '', providerLabel: '' };
   return {
@@ -599,6 +697,7 @@ function autoGrow() {
   t.style.height = 'auto';
   t.style.height = Math.min(t.scrollHeight, 140) + 'px';
 }
+
 $('btnSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('btnClear').addEventListener('click', async () => {
   chatEl.innerHTML = '';
@@ -614,6 +713,11 @@ $('btnClear').addEventListener('click', async () => {
   setTimeout(() => runLabel(''), 900);
 });
 $('btnSnapshot').addEventListener('click', snapshotNow);
+$('refreshRuntime').addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  loadRuntime(true).catch(() => {});
+});
 $('modelSelect').addEventListener('change', chooseModel);
 $('modelFilter').addEventListener('input', renderModels);
 $('refreshModels').addEventListener('click', () => loadModels(selectedModelId || config?.model, selectedProvider || config?.modelProvider));
@@ -625,7 +729,10 @@ $('refreshModels').addEventListener('click', () => loadModels(selectedModelId ||
     selectedModelId = config.model || '';
     selectedProvider = config.modelProvider || '';
     $('autoSnap').checked = config.attachPageContext !== false;
-    await loadModels(selectedModelId, selectedProvider);
+    await Promise.all([
+      loadModels(selectedModelId, selectedProvider),
+      loadRuntime(false)
+    ]);
   }
 })();
 
