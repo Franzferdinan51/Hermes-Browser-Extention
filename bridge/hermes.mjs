@@ -94,19 +94,32 @@ export class HermesClient extends EventEmitter {
     const skills = skillsResult.status === 'fulfilled' && Array.isArray(skillsResult.value)
       ? skillsResult.value
       : [];
-    const enabledToolsets = toolsets.filter((row) => row?.enabled !== false);
+    const toolsetsUnavailable = toolsetsResult.status === 'rejected'
+      && /HTTP 404\b/i.test(toolsetsResult.reason?.message || '');
+    const effectiveToolsets = toolsetsUnavailable
+      ? [{
+          name: 'browser',
+          label: 'Browser Automation',
+          description: 'Hermes-native browser tools mirrored by the companion when compatible.',
+          enabled: true,
+          configured: true,
+          source: 'bridge-fallback',
+          tools: ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_scroll', 'browser_back', 'browser_press', 'browser_get_images']
+        }]
+      : toolsets;
+    const enabledToolsets = effectiveToolsets.filter((row) => row?.enabled !== false);
     const enabledSkills = skills.filter((row) => row?.enabled !== false);
     const toolCount = enabledToolsets.reduce((sum, row) => sum + (Array.isArray(row?.tools) ? row.tools.length : 0), 0);
 
     const errors = [];
-    if (toolsetsResult.status === 'rejected') errors.push({ resource: 'toolsets', error: toolsetsResult.reason?.message || String(toolsetsResult.reason) });
+    if (toolsetsResult.status === 'rejected' && !toolsetsUnavailable) errors.push({ resource: 'toolsets', error: toolsetsResult.reason?.message || String(toolsetsResult.reason) });
     if (skillsResult.status === 'rejected') errors.push({ resource: 'skills', error: skillsResult.reason?.message || String(skillsResult.reason) });
 
     return {
-      toolsets,
+      toolsets: effectiveToolsets,
       skills,
       summary: {
-        toolsets: toolsets.length,
+        toolsets: effectiveToolsets.length,
         enabledToolsets: enabledToolsets.length,
         tools: toolCount,
         skills: skills.length,

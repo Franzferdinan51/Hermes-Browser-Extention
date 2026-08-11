@@ -393,7 +393,9 @@ async function modelInventory() {
   if (Array.isArray(providerData?.providers)) {
     for (const group of providerData.providers) {
       const configured = group.has_key === true && !group.auth_error;
-      const active = group.id === cfg.modelProvider || group.id === providerData.active_provider;
+      const active = group.id === cfg.modelProvider
+        || group.id === providerData.active_provider
+        || group.id === catalogData.active_provider;
       if (!configured && !active) continue;
       for (const item of group.models || []) {
         const id = typeof item === 'string' ? item : item.id;
@@ -405,6 +407,12 @@ async function modelInventory() {
           providerLabel: group.display_name || group.id,
           ...(typeof item === 'object' && item ? item : {})
         });
+      }
+    }
+    if (catalogData.active_provider === 'moa' && !out.some((item) => item.provider === 'moa')) {
+      const moaGroup = (catalogData.groups || []).find((group) => group.provider_id === 'moa');
+      for (const item of moaGroup?.models || []) {
+        if (item?.id) out.push({ id: item.id, label: item.label || item.id, provider: 'moa', providerLabel: moaGroup.provider || 'Mixture of Agents' });
       }
     }
   } else {

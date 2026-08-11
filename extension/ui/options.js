@@ -245,7 +245,7 @@ $('reset').addEventListener('click', async () => {
   }});
   $('modelSearch').value = '';
   $('providerFilter').value = '';
-  $('chatOnly').checked = true;
+  $('chatOnly').checked = false;
   await load();
   $('saveState').textContent = 'Defaults restored.';
 });
