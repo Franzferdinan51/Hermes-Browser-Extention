@@ -1,14 +1,6 @@
 /**
  * unit/page-test.mjs — Verifies the page-reader (DOM extraction) and
  * page-actor (DOM actions) modules against a jsdom fixture page.
- *
- * jsdom's Window defines its own `globalThis` that doesn't share storage with
- * the vm sandbox global object, so instead of running inside the jsdom window
- * we run the modules in a fresh vm context whose `globalThis` IS the sandbox,
- * and mount the jsdom DOM onto that sandbox as the module-visible globals
- * (document, location, window, getComputedStyle, MouseEvent, …). This mirrors
- * how a Chrome content script behaves (globalThis === window) and lets us
- * exercise the real DOM-read/write logic.
  */
 import { JSDOM } from 'jsdom';
 import fs from 'node:fs';
@@ -36,6 +28,7 @@ const html = `<!doctype html>
   <button class="cta" data-testid="buy">Buy Now</button>
   <select name="sel"><option value="a">A</option><option value="b">B</option></select>
   <textarea name="notes"></textarea>
+  <img id="hero" src="https://example.com/hero.png" alt="Hero image" width="640" height="320" />
   <div style="display:none"><button>Hidden Button</button></div>
 </body>
 </html>`;
@@ -44,20 +37,16 @@ const dom = new JSDOM(html, { url: 'https://example.com/test-page', pretendToBeV
 const window = dom.window;
 const document = window.document;
 
-// ---- Build the module-visible sandbox. In this fresh vm context, the real
-// `globalThis` IS the sandbox global object — so the modules' `globalThis.X=…`
-// guard registers on sandbox exactly like a browser content script registers on
-// window. We mount jsdom's real DOM objects as sandbox globals so the modules
-// operate on a real parsed DOM.
+// ---- Build the module-visible sandbox. ----
 const sandbox = {};
 sandbox.window = window;
 sandbox.document = document;
 sandbox.location = window.location;
+sandbox.history = window.history;
 sandbox.innerHeight = 1000;
 sandbox.innerWidth = 1000;
 sandbox.navigator = window.navigator;
 sandbox.getComputedStyle = (el) => {
-  // Walk ancestors: if any ancestor (or self) is display:none, cascade it.
   let node = el;
   while (node && node.nodeType === 1) {
     const inline = node.getAttribute ? node.getAttribute('style') : '';
@@ -68,6 +57,8 @@ sandbox.getComputedStyle = (el) => {
 };
 sandbox.MouseEvent = window.MouseEvent || function MouseEvent(type) { return new window.Event(type); };
 sandbox.KeyboardEvent = window.KeyboardEvent || function KeyboardEvent(type) { return new window.Event(type); };
+sandbox.InputEvent = window.InputEvent || window.Event;
+sandbox.MutationObserver = window.MutationObserver;
 sandbox.Element = window.Element;
 sandbox.HTMLElement = window.HTMLElement;
 sandbox.HTMLInputElement = window.HTMLInputElement;
@@ -78,32 +69,24 @@ sandbox.console = console;
 sandbox.Date = Date;
 sandbox.Math = Math;
 sandbox.JSON = JSON;
+sandbox.URL = URL;
 sandbox.setTimeout = setTimeout;
 sandbox.clearTimeout = clearTimeout;
 sandbox.Promise = Promise;
 
 // ---- jsdom gaps: polyfill browser conveniences the modules rely on ----
-// jsdom has no innerText; alias it to textContent on Element.prototype.
 if (!('innerText' in window.HTMLElement.prototype)) {
   Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
     configurable: true,
     get() { return this.textContent || ''; }
   });
 }
-// scrollIntoView / focus may be no-ops or missing; stub them on Element.prototype.
-['scrollIntoView', 'focus', 'scrollTo', 'scrollBy'].forEach((m) => {
-  if (typeof window.HTMLElement.prototype[m] !== 'function') {
-    window.HTMLElement.prototype[m] = function () {};
-  }
-  if (typeof window.Element && window.Element !== window.HTMLElement && typeof window.Element.prototype[m] !== 'function') {
-    window.Element.prototype[m] = function () {};
-  }
-  if (typeof window.HTMLDocument && typeof window.HTMLDocument.prototype[m] !== 'function') {
-    window.HTMLDocument.prototype[m] = function () {};
-  }
+['scrollIntoView', 'focus', 'scrollTo', 'scrollBy'].forEach((method) => {
+  if (typeof window.HTMLElement.prototype[method] !== 'function') window.HTMLElement.prototype[method] = function () {};
+  if (typeof window.Element && window.Element !== window.HTMLElement && typeof window.Element.prototype[method] !== 'function') window.Element.prototype[method] = function () {};
+  if (typeof window.HTMLDocument && typeof window.HTMLDocument.prototype[method] !== 'function') window.HTMLDocument.prototype[method] = function () {};
 });
 
-// Force visibility: patch getBoundingClientRect to give visible elements a box.
 const origGBCR = window.HTMLElement.prototype.getBoundingClientRect;
 window.HTMLElement.prototype.getBoundingClientRect = function () {
   const base = origGBCR.call(this);
@@ -134,18 +117,18 @@ try {
   process.exit(2);
 }
 
-// Locate the registered API. The modules write to `globalThis`, which in this
-// fresh vm context IS the sandbox global object.
 const reader = sandbox.HermesPageReader;
 const actor = sandbox.HermesPageActor;
 if (!reader || !actor) {
   console.error('Modules did not register on the sandbox. reader:', !!reader, 'actor:', !!actor);
-  console.error('Sandbox keys:', Object.keys(sandbox).filter((k) => /Hermes|AGUI/i.test(k)));
   process.exit(2);
 }
 
 let passed = 0, failed = 0;
-function ok(cond, name) { if (cond) { passed++; console.log('  \u2713 ' + name); } else { failed++; console.log('  \u2717 ' + name); } }
+function ok(cond, name) {
+  if (cond) { passed++; console.log('  ✓ ' + name); }
+  else { failed++; console.log('  ✗ ' + name); }
+}
 
 // ---- Tests: page reader ----
 const snap = reader.readPage();
@@ -169,7 +152,10 @@ async function drive() {
   ok(clickRes.ok, 'actor clicks button by text fallback');
 
   const refClick = await actor.runAction({ name: 'click', params: { selector: refButton.ref } });
-  ok(refClick.ok, 'actor clicks BrowserOS-style eN ref');
+  ok(refClick.ok, 'actor clicks eN ref');
+
+  const hermesRefClick = await actor.runAction({ name: 'click', params: { selector: `@${refButton.ref}` } });
+  ok(hermesRefClick.ok, 'actor clicks Hermes-style @eN ref');
 
   const grepRes = await actor.runAction({ name: 'grep', params: { pattern: 'paragraph text' } });
   ok(grepRes.ok && grepRes.count >= 1 && String(grepRes.value).includes('paragraph text'), 'actor greps visible page content');
@@ -177,8 +163,17 @@ async function drive() {
   const fillRes = await actor.runAction({ name: 'fill', params: { selector: '#q', value: 'hello world' } });
   ok(fillRes.ok && document.getElementById('q').value === 'hello world', 'actor fills input by id selector');
 
-  const selRes = await actor.runAction({ name: 'set_value', params: { selector: 'select[name="sel"]', value: 'b' } });
-  ok(selRes.ok, 'actor set_value on dropdown');
+  const selRes = await actor.runAction({ name: 'select_option', params: { selector: 'select[name="sel"]', value: 'b' } });
+  ok(selRes.ok && document.querySelector('select[name="sel"]').value === 'b', 'actor selects dropdown option');
+
+  const hoverRes = await actor.runAction({ name: 'hover', params: { selector: `@${refButton.ref}` } });
+  ok(hoverRes.ok, 'actor hovers Hermes ref');
+
+  const waitRes = await actor.runAction({ name: 'wait', params: { selector: '#go', ms: 50 } });
+  ok(waitRes.ok, 'actor wait resolves immediately for existing selector');
+
+  const imagesRes = await actor.runAction({ name: 'get_images', params: {} });
+  ok(imagesRes.ok && imagesRes.count >= 1 && imagesRes.value.some((img) => img.alt === 'Hero image'), 'actor returns page image metadata');
 
   const readRes = await actor.runAction({ name: 'read', params: { selector: 'h1' } });
   ok(readRes.ok && String(readRes.value).includes('Welcome'), 'actor reads element text');
