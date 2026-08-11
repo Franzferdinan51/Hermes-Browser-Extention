@@ -1,8 +1,8 @@
 /**
  * background.js — Manifest V3 service worker.
  *
- * Owns configuration, the AG-UI client, Hermes bridge WebSocket, page context,
- * browser-tool execution, and UI event relaying.
+ * Owns configuration, AG-UI, the authenticated bridge WebSocket, page context,
+ * browser-tool execution, Hermes runtime discovery, and UI event relaying.
  */
 
 import { AGUIClient } from './agui-client.js';
@@ -13,7 +13,7 @@ const DEFAULTS = {
   model: 'qwen3.5-9b',
   modelProvider: 'lmstudio',
   workspace: '',
-  autoSnapshot: false, // legacy key; attachPageContext is the source of truth
+  autoSnapshot: false,
   attachPageContext: true,
   maxDomChars: 30000,
   enablePageActing: true
@@ -30,13 +30,30 @@ function emit(type, payload) { relay.dispatchEvent(new CustomEvent(type, { detai
 let client = null;
 let currentThreadId = null;
 let lastSnapshot = null;
+let lastRuntime = null;
+
+function bridgeHeaders(cfg) {
+  return cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {};
+}
+
+async function bridgeJson(path) {
+  const cfg = await store.get();
+  const url = `${cfg.bridgeUrl.replace(/\/$/, '')}${path}`;
+  const response = await fetch(url, { headers: bridgeHeaders(cfg) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    const detail = data?.error?.message || data?.error || `HTTP ${response.status}`;
+    throw new Error(String(detail));
+  }
+  return data;
+}
 
 async function buildClient() {
   const cfg = await store.get();
   if (client) client.removeAll();
   client = new AGUIClient({
     url: `${cfg.bridgeUrl.replace(/\/$/, '')}/agent`,
-    headers: cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {},
+    headers: bridgeHeaders(cfg),
     onEvent: (evt) => {
       emit('agui-event', evt);
       handleEvent(evt);
@@ -48,8 +65,6 @@ async function buildClient() {
 
 async function handleEvent(evt) {
   try {
-    // Browser execution is driven by bridge WebSocket browser-action messages.
-    // AG-UI events are still relayed to all open UI surfaces for rendering.
     if (evt.type === 'RUN_STARTED') emit('agent-state', { phase: 'running' });
     else if (evt.type === 'RUN_FINISHED') emit('agent-state', { phase: 'done' });
     else if (evt.type === 'RUN_ERROR') emit('agent-state', { phase: 'error' });
@@ -65,8 +80,11 @@ let bridgeWs = null;
 let bridgeReconnectTimer = null;
 
 async function wsBridgeUrl() {
-  const c = await store.get();
-  return `${c.bridgeUrl.replace(/^http/i, 'ws').replace(/\/+$/, '')}/ws`;
+  const cfg = await store.get();
+  const base = cfg.bridgeUrl.replace(/^http/i, 'ws').replace(/\/+$/, '');
+  const url = new URL(`${base}/ws`);
+  if (cfg.authToken) url.searchParams.set('token', cfg.authToken);
+  return url.href;
 }
 
 function scheduleBridgeReconnect() {
@@ -229,7 +247,10 @@ async function runActionOnTab(action, tabId) {
 
   let resp = await chrome.tabs.sendMessage(tabId, { kind: 'run-action', action }).catch(() => null);
   if (!resp) {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/page-reader.js', 'lib/page-actor.js', 'lib/content.js'] }).catch(() => {});
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['lib/page-reader.js', 'lib/page-actor.js', 'lib/content.js']
+    }).catch(() => {});
     resp = await chrome.tabs.sendMessage(tabId, { kind: 'run-action', action }).catch(() => null);
   }
   return resp || { ok: false, error: 'Could not reach page (restricted browser page or content script unavailable)' };
@@ -295,9 +316,17 @@ function clearThread() {
   currentThreadId = null;
 }
 
+async function loadRuntime() {
+  const runtime = await bridgeJson('/v1/runtime');
+  lastRuntime = runtime;
+  emit('runtime', runtime);
+  return runtime;
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.bridgeUrl || changes.authToken) {
+    lastRuntime = null;
     buildClient().catch(() => {});
     try { bridgeWs?.close(); } catch {}
     bridgeWs = null;
@@ -329,19 +358,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     case 'set-config': {
       store.set(msg.patch || {}).then(async () => {
+        lastRuntime = null;
         await buildClient();
         sendResponse({ ok: true });
       }).catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     case 'get-models': {
-      (async () => {
-        const cfg = await store.get();
-        const url = `${cfg.bridgeUrl.replace(/\/$/, '')}/v1/models`;
-        const r = await fetch(url, { headers: cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {} });
-        const data = await r.json();
-        sendResponse({ ok: r.ok && !data.error, ...data });
-      })().catch((e) => sendResponse({ ok: false, error: String(e), data: [] }));
+      bridgeJson('/v1/models')
+        .then((data) => sendResponse({ ok: true, ...data }))
+        .catch((e) => sendResponse({ ok: false, error: String(e), data: [] }));
+      return true;
+    }
+    case 'get-runtime': {
+      if (lastRuntime && !msg.refresh) {
+        sendResponse({ ok: true, ...lastRuntime });
+        return true;
+      }
+      loadRuntime()
+        .then((data) => sendResponse({ ok: true, ...data }))
+        .catch((e) => sendResponse({ ok: false, error: String(e), toolsets: [], skills: [] }));
       return true;
     }
     case 'clear-thread': {
@@ -354,6 +390,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         threadId: currentThreadId,
         snapshot: lastSnapshot,
+        runtime: lastRuntime,
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN
       });
@@ -389,6 +426,7 @@ chrome.runtime.onConnect.addListener((port) => {
       port.postMessage({
         kind: 'state',
         threadId: currentThreadId,
+        runtime: lastRuntime,
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN
       });
@@ -407,6 +445,7 @@ relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.
 relay.addEventListener('page-snapshot', (e) => relayToPorts('page-snapshot', { snapshot: e.detail }));
 relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.detail));
 relay.addEventListener('agent-state', (e) => relayToPorts('agent-state', e.detail));
+relay.addEventListener('runtime', (e) => relayToPorts('runtime', { runtime: e.detail }));
 
 chrome.action.onClicked.addListener((tab) => {
   if (chrome.sidePanel) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
