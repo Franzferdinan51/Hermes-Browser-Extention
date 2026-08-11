@@ -377,7 +377,7 @@ function buildHermesPrompt(input) {
     if (role === 'tool') parts.push(`[TOOL RESULT]\n${content}`);
     else if (role === 'assistant') parts.push(`[ASSISTANT]\n${content}`);
     else if (role === 'system') parts.push(`[SYSTEM]\n${content}`);
-    else parts.push(`[USER]\n${content}`);
+    else if (role === 'user') parts.push(`[USER REQUEST]\n${content}`);
   }
 
   // Keep this list aligned with Hermes' current core browser tool reference.
