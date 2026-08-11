@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Hermes Agent Panel</title>
+  <link rel="stylesheet" href="common.css" />
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="ph">
+    <div class="ph-logo">⚡</div>
+    <div class="ph-title">Hermes Agent</div>
+    <div class="ph-status" id="phStatus" title="connection">●</div>
+  </header>
+
+  <section class="pagebar" id="pagebar">
+    <div class="page-title" id="pageTitle">No page snapshot yet</div>
+    <button id="btnSnapshot" class="mini">snapshot</button>
+  </section>
+
+  <main class="chat" id="chat">
+    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and act on it.</div>
+  </main>
+
+  <footer class="composer">
+    <div class="toolbar">
+      <button id="btnClear" title="New conversation">New</button>
+      <span class="model" id="modelLabel">—</span>
+    </div>
+    <div class="composer-row">
+      <textarea id="prompt" rows="1" placeholder="Message Hermes…  (attach page context sends a live snapshot)"></textarea>
+      <button id="send" class="primary">Send</button>
+    </div>
+    <div class="attachbar">
+      <label class="check" title="Include a fresh page snapshot in every message">
+        <input type="checkbox" id="autoSnap" checked /> attach page
+      </label>
+      <span class="spacer"></span>
+      <span class="muted" id="runInfo"></span>
+    </div>
+  </footer>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

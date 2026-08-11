@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Hermes Agent — Browser Companion",
+  "short_name": "Hermes",
+  "version": "0.1.0",
+  "description": "Connect your Hermes agent to the browser over the AG-UI protocol. Read and interact with the current page, stream agent responses, and let Hermes drive DOM actions.",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8965/*",
+    "http://localhost:8965/*",
+    "ws://127.0.0.1:8965/*",
+    "ws://localhost:8965/*"
+  ],
+  "background": {
+    "service_worker": "lib/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Hermes Agent",
+    "default_popup": "ui/popup.html"
+  },
+  "options_page": "ui/options.html",
+  "side_panel": {
+    "default_path": "ui/panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "lib/agui-client.js",
+        "lib/page-reader.js",
+        "lib/page-actor.js",
+        "lib/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/page-reader.js", "lib/page-actor.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Hermes</title>
+  <link rel="stylesheet" href="common.css" />
+  <style>
+    body { margin: 0; width: 340px; max-height: 420px; display: flex; flex-direction: column; background: var(--bg); }
+    .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .head .logo { font-size: 16px; }
+    .head .title { font-weight: 700; font-size: 14px; flex: 1; }
+    .head button { padding: 4px 8px; font-size: 11px; }
+    #status { font-size: 11px; padding: 4px 12px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; align-items: center; }
+    #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    #status .dot.ok { background: var(--green); }
+    #status .dot.err { background: var(--red); }
+    #status .dot.busy { background: var(--amber); }
+    #page { margin: 8px 12px 0; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #page button { font-size: 10px; padding: 2px 6px; margin-left: 6px; }
+    #log { flex: 1; margin: 8px 12px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 6px; min-height: 60px; max-height: 180px; }
+    .msg { padding: 7px 9px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+    .msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 25%, transparent); }
+    .msg.assistant { align-self: flex-start; }
+    .msg.tool { align-self: flex-start; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .msg.err { background: rgba(255,92,114,.12); border-color: rgba(255,92,114,.4); color: var(--red); }
+    .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+    #prompt { flex: 1; }
+    #send { padding: 8px 14px; }
+    .grow { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="logo">⚡</span>
+    <span class="title">Hermes</span>
+    <button id="openPanel">Side panel →</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div id="status"><span id="dot" class="dot"></span><span id="statusText">connecting…</span><span class="grow"></span><button id="options">Options</button></div>
+  <div id="page"><span id="pageLabel">—</span><button id="snap">snapshot</button></div>
+  <div id="log"></div>
+  <div class="row">
+    <input type="text" id="prompt" placeholder="Ask Hermes about this page…" />
+    <button id="send" class="primary">Send</button>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "hermes-browser-extension-test",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Unit tests for the Hermes browser extension page reader/actor logic (using a DOM fixture).",
+  "scripts": {
+    "test": "node unit/page-test.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

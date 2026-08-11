@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes Browser — Options</title>
+  <link rel="stylesheet" href="common.css" />
+  <style>
+    body { margin: 0; padding: 32px; display: flex; justify-content: center; }
+    .wrap { width: 560px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .status-line { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+    #health { font-size: 13px; }
+    .row2 { display: flex; gap: 12px; }
+    .row2 .field { flex: 1; }
+    .actions { display: flex; gap: 10px; margin-top: 8px; }
+    #testResult { margin-top: 12px; font-size: 12px; white-space: pre-wrap; font-family: ui-monospace, monospace; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>⚡ Hermes Browser Companion</h1>
+    <p class="sub">Connect Hermes to this browser over the AG-UI protocol.</p>
+
+    <div class="card">
+      <div class="status-line">
+        <span class="pill warn" id="healthPill">checking…</span>
+        <span class="muted" id="health"></span>
+      </div>
+
+      <div class="field">
+        <label for="bridgeUrl">Local bridge URL</label>
+        <input type="url" id="bridgeUrl" placeholder="http://127.0.0.1:8965" />
+        <div class="hint">Run <span class="code">node bridge/server.mjs</span> (or <span class="code">npm start</span> in the repository). This is the AG-UI endpoint that talks to Hermes on :8787.</div>
+      </div>
+
+      <div class="field">
+        <label for="authToken">Bridge auth token (optional)</label>
+        <input type="password" id="authToken" placeholder="leave blank if bridge is localhost-only" />
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label for="model">Hermes model</label>
+          <input type="text" id="model" placeholder="qwen3.5-9b" />
+        </div>
+        <div class="field">
+          <label for="modelProvider">Provider</label>
+          <input type="text" id="modelProvider" placeholder="lmstudio" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="workspace">Workspace path</label>
+        <input type="text" id="workspace" placeholder="/Users/duckets/workspace" />
+        <div class="hint">Hermes working directory for this browser session.</div>
+      </div>
+
+      <div class="field">
+        <label class="check"><input type="checkbox" id="attachPageContext" checked /> Attach current page context automatically</label>
+        <div class="hint">When enabled, each message includes a snapshot of the page you're viewing so Hermes can read it.</div>
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="enablePageActing" checked /> Allow Hermes to interact with the page</label>
+        <div class="hint">Lets Hermes click, fill, type, and scroll via tool calls. Disable for read-only.</div>
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary">Save</button>
+        <button id="test">Test connection</button>
+        <button id="reset">Reset defaults</button>
+      </div>
+      <div id="testResult"></div>
+    </div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

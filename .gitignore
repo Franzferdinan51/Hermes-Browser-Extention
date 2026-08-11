@@ -1,0 +1,18 @@
+# deps
+node_modules/
+npm-debug.log*
+
+# secrets / env
+.env
+.env.*
+!.env.example
+
+# editor / os
+.DS_Store
+*.swp
+
+# test artifacts (but keep the test source)
+test/node_modules/
+
+# runtime logs
+*.log

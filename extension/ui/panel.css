@@ -1,0 +1,45 @@
+/* Hermes Agent side panel */
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-size: 13px; height: 100vh; overflow: hidden; }
+
+.ph { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.ph-logo { font-size: 16px; }
+.ph-title { font-weight: 700; flex: 1; }
+.ph-status { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); transition: background .2s; }
+.ph-status.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.ph-status.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.ph-status.busy { background: var(--amber); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.pagebar { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+.page-title { flex: 1; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.mini { padding: 3px 9px; font-size: 11px; }
+
+.chat { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.empty { color: var(--muted); text-align: center; font-size: 12px; margin: 24px 8px; }
+
+.msg { max-width: 96%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 28%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.msg.assistant { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); }
+.msg.tool { align-self: stretch; font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); }
+.msg.tool .toolhead { color: var(--accent-2); font-weight: 600; }
+.msg.tool .toolargs { color: var(--muted); margin-top: 3px; white-space: pre-wrap; }
+.msg.tool.ok { border-left-color: var(--green); }
+.msg.tool.err { border-left-color: var(--red); color: var(--red); }
+.msg.err { align-self: flex-start; background: rgba(255,92,114,.12); border: 1px solid rgba(255,92,114,.4); color: var(--red); }
+.msg.state { align-self: stretch; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px dashed var(--border); }
+.msg .caret { animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.composer { border-top: 1px solid var(--border); background: var(--panel); padding: 8px 10px 6px; }
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.toolbar .model { font-size: 11px; color: var(--muted); }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+#prompt { resize: none; flex: 1; min-height: 38px; max-height: 140px; line-height: 1.4; font-size: 13px; }
+#send { padding: 9px 16px; }
+.attachbar { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.attachbar .check { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+.spacer { flex: 1; }
+#runInfo { font-size: 11px; color: var(--accent-2); }
+
+.check input { accent-color: var(--accent); cursor: pointer; }

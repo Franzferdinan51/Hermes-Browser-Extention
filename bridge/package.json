@@ -1,0 +1,15 @@
+{
+  "name": "hermes-browser-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Exposes Hermes Agent as an AG-UI-compatible agent endpoint for the Hermes browser extension.",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
