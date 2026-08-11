@@ -23,8 +23,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Hermes Agent",
-    "default_popup": "ui/popup.html"
+    "default_title": "Open Hermes side panel"
   },
   "options_page": "ui/options.html",
   "side_panel": {

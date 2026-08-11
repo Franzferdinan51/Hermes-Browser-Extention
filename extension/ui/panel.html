@@ -8,8 +8,8 @@
 </head>
 <body>
   <header class="ph">
-    <div class="ph-logo">⚡</div>
-    <div class="ph-title">Hermes Agent</div>
+    <div class="ph-logo"><img src="../icons/icon32.png" alt="" /></div>
+    <div class="ph-title"><strong>Hermes</strong><span>browser companion</span></div>
     <div class="ph-status" id="phStatus" title="connection">●</div>
   </header>
 
@@ -25,7 +25,11 @@
   <footer class="composer">
     <div class="toolbar">
       <button id="btnClear" title="New conversation">New</button>
-      <span class="model" id="modelLabel">—</span>
+      <label class="model-picker" title="Choose the model Hermes uses">
+        <span>MODEL</span>
+        <select id="modelSelect" aria-label="Hermes model"><option>Loading models…</option></select>
+      </label>
+      <button id="refreshModels" class="icon-btn" title="Refresh model list">↻</button>
     </div>
     <div class="composer-row">
       <textarea id="prompt" rows="1" placeholder="Message Hermes…  (attach page context sends a live snapshot)"></textarea>

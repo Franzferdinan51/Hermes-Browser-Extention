@@ -236,6 +236,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       store.set(msg.patch || {}).then(async () => { await buildClient(); sendResponse({ ok: true }); }).catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
+    case 'get-models': {
+      (async () => {
+        const cfg = await store.get();
+        const url = `${cfg.bridgeUrl.replace(/\/$/, '')}/v1/models`;
+        const r = await fetch(url, { headers: cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {} });
+        const data = await r.json();
+        sendResponse({ ok: r.ok && !data.error, ...data });
+      })().catch((e) => sendResponse({ ok: false, error: String(e), data: [] }));
+      return true;
+    }
     case 'clear-thread': {
       clearThread();
       sendResponse({ ok: true });

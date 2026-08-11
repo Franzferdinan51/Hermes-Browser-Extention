@@ -276,6 +276,41 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+  if (req.method === 'GET' && route === '/v1/models') {
+    // Auto-login, fetch from Hermes, then flatten.
+    try {
+      const loginRes = await fetch(`${cfg.hermesUrl}/api/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: cfg.password })
+      });
+      const sc = loginRes.headers.get('set-cookie') || '';
+      const m = sc.match(/(?:^|,\s*)(?:[^;]+;\s*)?hermes_session(?:_at)?=([^;]+)/);
+      if (!m) throw new Error('login cookie missing');
+      const cookie = `hermes_session=${m[1]}`;
+      const r = await fetch(`${cfg.hermesUrl}/api/models`, { headers: { Cookie: cookie } });
+      const data = await r.json().catch(() => ({}));
+      // Flatten the groups into a simple {id,label,provider}[] for the extension.
+      const out = [];
+      for (const g of (data.groups || [])) {
+        const pid = g.provider_id || '';
+        for (const m of g.models || []) {
+          out.push({ id: m.id, label: m.label || m.id, provider: pid, providerLabel: g.provider || pid });
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        object: 'list',
+        active_provider: data.active_provider,
+        default_model: data.default_model,
+        data: out
+      }));
+    } catch (e) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', error: e.message, data: [] }));
+    }
+    return;
+  }
+
   if (req.method === 'GET' && route === '/healthz') {
     let hermesOk = false; let hermesInfo = '';
     try {

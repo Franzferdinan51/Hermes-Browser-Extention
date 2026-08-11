@@ -204,6 +204,51 @@ async function snapshotNow() {
   if (r && r.ok) updatePageBar();
 }
 
+async function loadModels(selected, selectedProvider) {
+  const select = $('modelSelect');
+  select.innerHTML = '<option>Loading models…</option>';
+  const r = await chrome.runtime.sendMessage({ kind: 'get-models' }).catch(() => null);
+  const models = r && r.ok ? (r.data || []) : [];
+  if (!models.length) {
+    select.innerHTML = '<option value="qwen3.5-9b">qwen3.5-9b</option>';
+    select.value = selected || 'qwen3.5-9b';
+    return;
+  }
+  const groups = new Map();
+  for (const m of models) {
+    const key = m.providerLabel || m.provider || 'Models';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+  select.innerHTML = '';
+  for (const [group, entries] of groups) {
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group;
+    for (const m of entries) {
+      const option = document.createElement('option');
+      option.value = m.id;
+      option.dataset.provider = m.provider || '';
+      option.textContent = m.label || m.id;
+      optgroup.appendChild(option);
+    }
+    select.appendChild(optgroup);
+  }
+  const match = [...select.options].find((o) => o.value === selected && (!selectedProvider || o.dataset.provider === selectedProvider));
+  select.value = match ? match.value : (r.default_model || select.options[0]?.value || '');
+}
+
+async function chooseModel() {
+  const option = $('modelSelect').selectedOptions[0];
+  if (!option?.value) return;
+  await chrome.runtime.sendMessage({ kind: 'set-config', patch: {
+    model: option.value,
+    modelProvider: option.dataset.provider || config?.modelProvider || ''
+  }});
+  config = { ...(config || {}), model: option.value, modelProvider: option.dataset.provider || config?.modelProvider || '' };
+  $('runInfo').textContent = 'model saved';
+  setTimeout(() => { if (!busy) $('runInfo').textContent = ''; }, 1200);
+}
+
 // ---- send ----
 async function send() {
   const text = $('prompt').value.trim();
@@ -247,11 +292,13 @@ $('btnSnapshot').addEventListener('click', snapshotNow);
   const r = await chrome.runtime.sendMessage({ kind: 'get-config' }).catch(() => null);
   if (r && r.ok) {
     config = r.config;
-    $('modelLabel').textContent = config.model || '—';
     $('autoSnap').checked = config.attachPageContext !== false;
+    await loadModels(config.model, config.modelProvider);
   }
 })();
 
+$('modelSelect').addEventListener('change', chooseModel);
+$('refreshModels').addEventListener('click', () => loadModels(config?.model, config?.modelProvider));
 connectPort();
 updatePageBar();
 console.log('[HermesPanel] ready');

@@ -6,17 +6,22 @@
   <title>Hermes Browser — Options</title>
   <link rel="stylesheet" href="common.css" />
   <style>
-    body { margin: 0; padding: 32px; display: flex; justify-content: center; }
+    body { margin: 0; padding: 42px 24px; display: flex; justify-content: center; min-height: 100vh; }
     .wrap { width: 560px; }
     h1 { font-size: 20px; margin: 0 0 4px; }
     .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
-    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 24px; box-shadow: 0 24px 80px rgba(0,0,0,.28); backdrop-filter: blur(18px); }
+    h1 { display: flex; align-items: center; gap: 9px; letter-spacing: -.02em; }
+    h1::first-letter { color: var(--accent-2); }
     .status-line { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
     #health { font-size: 13px; }
     .row2 { display: flex; gap: 12px; }
     .row2 .field { flex: 1; }
     .actions { display: flex; gap: 10px; margin-top: 8px; }
     #testResult { margin-top: 12px; font-size: 12px; white-space: pre-wrap; font-family: ui-monospace, monospace; color: var(--muted); }
+    .select-row { display: flex; gap: 8px; }
+    .select-row select { flex: 1; }
+    .select-row button { width: 40px; font-size: 17px; }
   </style>
 </head>
 <body>
@@ -42,9 +47,10 @@
       </div>
 
       <div class="row2">
-        <div class="field">
+        <div class="field model-field">
           <label for="model">Hermes model</label>
-          <input type="text" id="model" placeholder="qwen3.5-9b" />
+          <div class="select-row"><select id="model"><option value="">Loading available models…</option></select><button id="refreshModels" type="button" title="Refresh model list">↻</button></div>
+          <div class="hint">Models are loaded from your running Hermes WebUI through the local bridge.</div>
         </div>
         <div class="field">
           <label for="modelProvider">Provider</label>
