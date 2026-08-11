@@ -6,79 +6,145 @@
   <title>Hermes Browser — Options</title>
   <link rel="stylesheet" href="common.css" />
   <style>
-    body { margin: 0; padding: 42px 24px; display: flex; justify-content: center; min-height: 100vh; }
-    .wrap { width: 560px; }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
-    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 24px; box-shadow: 0 24px 80px rgba(0,0,0,.28); backdrop-filter: blur(18px); }
-    h1 { display: flex; align-items: center; gap: 9px; letter-spacing: -.02em; }
-    h1::first-letter { color: var(--accent-2); }
-    .status-line { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-    #health { font-size: 13px; }
-    .row2 { display: flex; gap: 12px; }
-    .row2 .field { flex: 1; }
-    .actions { display: flex; gap: 10px; margin-top: 8px; }
-    #testResult { margin-top: 12px; font-size: 12px; white-space: pre-wrap; font-family: ui-monospace, monospace; color: var(--muted); }
-    .select-row { display: flex; gap: 8px; }
-    .select-row select { flex: 1; }
-    .select-row button { width: 40px; font-size: 17px; }
+    body { margin: 0; padding: 36px 22px 56px; display: flex; justify-content: center; min-height: 100vh; }
+    .wrap { width: min(860px, 100%); }
+    .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+    .hero img { width: 54px; height: 54px; filter: drop-shadow(0 10px 24px rgba(0,0,0,.34)); }
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.025em; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 22px; box-shadow: var(--shadow-lg); backdrop-filter: blur(18px); }
+    .card + .card { margin-top: 16px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .section-title h2 { font-size: 14px; margin: 0; }
+    .status-line { display: flex; align-items: center; gap: 10px; }
+    #health { font-size: 12px; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    #testResult { margin-top: 12px; font-size: 11px; white-space: pre-wrap; font-family: ui-monospace, monospace; color: var(--muted); max-height: 170px; overflow: auto; }
+    .secret-row { display: flex; gap: 8px; }
+    .secret-row input { flex: 1; }
+    .secret-row button { flex: 0 0 auto; }
+    .filter-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(150px, .6fr); gap: 10px; margin-bottom: 10px; }
+    .model-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(9,11,22,.42); }
+    .model-list select { border: 0; border-radius: 0; min-height: 220px; padding: 8px; background: transparent; box-shadow: none; }
+    .model-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+    .model-meta strong { color: var(--text); }
+    .model-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 8px 0 10px; }
+    .model-controls .check { margin: 0; }
+    .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .range-row { display: grid; grid-template-columns: 1fr 92px; gap: 10px; align-items: center; }
+    .range-row input[type=range] { width: 100%; accent-color: var(--accent); }
+    .switch-card { display: flex; gap: 10px; padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,.055); }
+    .switch-card:last-child { border-bottom: 0; }
+    .switch-card .copy { flex: 1; }
+    .switch-card .copy strong { display: block; font-size: 12px; margin-bottom: 2px; }
+    .switch-card .copy span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .row2, .filter-grid { grid-template-columns: 1fr; } body { padding: 24px 14px 40px; } }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>⚡ Hermes Browser Companion</h1>
-    <p class="sub">Connect Hermes to this browser over the AG-UI protocol.</p>
-
-    <div class="card">
-      <div class="status-line">
-        <span class="pill warn" id="healthPill">checking…</span>
-        <span class="muted" id="health"></span>
+    <div class="hero">
+      <img src="../icons/icon128.png" alt="Hermes Browser" />
+      <div>
+        <h1>Hermes Browser Companion</h1>
+        <p class="sub">Local-first browser control over AG-UI, with model discovery and page-action controls.</p>
       </div>
+    </div>
 
-      <div class="field">
-        <label for="bridgeUrl">Local bridge URL</label>
-        <input type="url" id="bridgeUrl" placeholder="http://127.0.0.1:8965" />
-        <div class="hint">Run <span class="code">node bridge/server.mjs</span> (or <span class="code">npm start</span> in the repository). This is the AG-UI endpoint that talks to Hermes on :8787.</div>
-      </div>
+    <div class="grid">
+      <div>
+        <div class="card">
+          <div class="section-title">
+            <h2>Connection</h2>
+            <div class="status-line"><span class="pill warn" id="healthPill">checking…</span><span class="muted" id="health"></span></div>
+          </div>
 
-      <div class="field">
-        <label for="authToken">Bridge auth token (optional)</label>
-        <input type="password" id="authToken" placeholder="leave blank if bridge is localhost-only" />
-      </div>
+          <div class="field">
+            <label for="bridgeUrl">Local bridge URL</label>
+            <input type="url" id="bridgeUrl" placeholder="http://127.0.0.1:8965" />
+            <div class="hint">AG-UI bridge endpoint. Default: <span class="code">http://127.0.0.1:8965</span>.</div>
+          </div>
 
-      <div class="row2">
-        <div class="field model-field">
-          <label for="model">Hermes model</label>
-          <div class="select-row"><select id="model"><option value="">Loading available models…</option></select><button id="refreshModels" type="button" title="Refresh model list">↻</button></div>
-          <div class="hint">Models are loaded from your running Hermes WebUI through the local bridge.</div>
+          <div class="field">
+            <label for="authToken">Bridge auth token</label>
+            <div class="secret-row"><input type="password" id="authToken" placeholder="optional for localhost-only bridges" /><button id="toggleToken" type="button">Show</button></div>
+          </div>
+
+          <div class="actions">
+            <button id="test" class="primary">Test connection</button>
+            <button id="refreshModels" type="button">Refresh models</button>
+          </div>
+          <div id="testResult"></div>
         </div>
-        <div class="field">
-          <label for="modelProvider">Provider</label>
-          <input type="text" id="modelProvider" placeholder="lmstudio" />
+
+        <div class="card">
+          <div class="section-title"><h2>Model browser</h2><span class="pill" id="modelSource">bridge</span></div>
+
+          <div class="filter-grid">
+            <div class="field">
+              <label for="modelSearch">Search models</label>
+              <input type="search" id="modelSearch" placeholder="qwen, llama, gemma, provider…" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="providerFilter">Provider</label>
+              <select id="providerFilter"><option value="">All providers</option></select>
+            </div>
+          </div>
+
+          <div class="model-controls">
+            <label class="check"><input type="checkbox" id="chatOnly" checked /> hide embedding / reranker / audio models</label>
+            <span class="count" id="modelCount">0 models</span>
+          </div>
+
+          <div class="model-list">
+            <select id="model" size="9" aria-label="Available Hermes models"><option value="">Loading available models…</option></select>
+            <div class="model-meta" id="modelMeta"><span>Select a model to see its details.</span></div>
+          </div>
+
+          <div class="row2" style="margin-top:12px">
+            <div class="field">
+              <label for="modelProvider">Selected provider</label>
+              <input type="text" id="modelProvider" placeholder="lmstudio" />
+            </div>
+            <div class="field">
+              <label for="workspace">Workspace path</label>
+              <input type="text" id="workspace" placeholder="/Users/you/workspace" />
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="field">
-        <label for="workspace">Workspace path</label>
-        <input type="text" id="workspace" placeholder="/Users/duckets/workspace" />
-        <div class="hint">Hermes working directory for this browser session.</div>
-      </div>
+      <div>
+        <div class="card">
+          <div class="section-title"><h2>Browser context</h2></div>
 
-      <div class="field">
-        <label class="check"><input type="checkbox" id="attachPageContext" checked /> Attach current page context automatically</label>
-        <div class="hint">When enabled, each message includes a snapshot of the page you're viewing so Hermes can read it.</div>
-      </div>
-      <div class="field">
-        <label class="check"><input type="checkbox" id="enablePageActing" checked /> Allow Hermes to interact with the page</label>
-        <div class="hint">Lets Hermes click, fill, type, and scroll via tool calls. Disable for read-only.</div>
-      </div>
+          <div class="switch-card">
+            <input type="checkbox" id="attachPageContext" checked />
+            <div class="copy"><strong>Attach current page</strong><span>Send a fresh snapshot with each request so Hermes can read the page.</span></div>
+          </div>
+          <div class="switch-card">
+            <input type="checkbox" id="enablePageActing" checked />
+            <div class="copy"><strong>Allow page actions</strong><span>Permit click, fill, type, scroll, and other browser tools. Disable for read-only use.</span></div>
+          </div>
 
-      <div class="actions">
-        <button id="save" class="primary">Save</button>
-        <button id="test">Test connection</button>
-        <button id="reset">Reset defaults</button>
+          <div class="field" style="margin-top:16px">
+            <label for="maxDomChars">Maximum DOM context</label>
+            <div class="range-row"><input type="range" id="maxDomChars" min="5000" max="100000" step="5000" /><input type="number" id="maxDomCharsNumber" min="5000" max="100000" step="5000" /></div>
+            <div class="hint">Larger snapshots provide more context but consume more tokens. Default: 30,000 characters.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title"><h2>Save & restore</h2></div>
+          <div class="actions">
+            <button id="save" class="primary">Save settings</button>
+            <button id="reset">Reset defaults</button>
+          </div>
+          <div class="hint" id="saveState" style="margin-top:10px">Changes are stored locally in the browser.</div>
+        </div>
       </div>
-      <div id="testResult"></div>
     </div>
   </div>
   <script src="options.js"></script>
