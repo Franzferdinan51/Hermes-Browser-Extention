@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Hermes Agent — Browser Companion",
   "short_name": "Hermes",
-  "version": "0.1.0",
-  "description": "Connect your Hermes agent to the browser over the AG-UI protocol. Read and interact with the current page, stream agent responses, and let Hermes drive DOM actions.",
+  "version": "0.2.0",
+  "description": "Connect Hermes to the browser over AG-UI with searchable model discovery, page context, streaming responses, and permission-aware DOM actions.",
   "permissions": [
     "sidePanel",
     "storage",
