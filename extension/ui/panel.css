@@ -16,6 +16,27 @@ body { display: flex; flex-direction: column; background: var(--bg); color: var(
 .page-title { flex: 1; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.mini { padding: 3px 9px; font-size: 11px; }
 
+/* Hermes-native toolset + skill inventory */
+.runtimebar { border-bottom: 1px solid var(--border); background: rgba(13,16,29,.78); }
+.runtime-details > summary { display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; list-style: none; user-select: none; }
+.runtime-details > summary::-webkit-details-marker { display: none; }
+.runtime-details > summary::before { content: '▸'; color: var(--muted); font-size: 10px; transition: transform .15s; }
+.runtime-details[open] > summary::before { transform: rotate(90deg); }
+.runtime-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
+.runtime-summary { margin-left: auto; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--accent-2); }
+.runtime-content { padding: 0 14px 10px 30px; max-height: 210px; overflow-y: auto; }
+.runtime-section-head { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.runtime-section-head strong { color: var(--text); font-size: 10px; }
+.runtime-skills-head { margin-top: 7px; }
+.runtime-refresh { margin-left: auto; padding: 1px 6px; min-height: 0; border: 0; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
+.runtime-refresh:hover { color: var(--accent-2); }
+.runtime-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.runtime-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 6px; border-radius: 999px; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--muted); font-size: 10px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-chip.ok { border-color: rgba(82,210,151,.26); color: var(--text); }
+.runtime-chip.warn { border-color: rgba(255,190,92,.34); color: var(--amber); }
+.runtime-chip.agent { border-color: rgba(144,119,255,.35); color: var(--accent-2); }
+.runtime-errors { margin-top: 8px; padding: 6px 7px; border-radius: 7px; border: 1px solid rgba(255,92,114,.28); background: rgba(255,92,114,.08); color: var(--red); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+
 .chat { flex: 1; overflow-y: auto; padding: 12px 14px 18px; display: flex; flex-direction: column; gap: 9px; scroll-behavior: smooth; }
 .empty { color: var(--muted); text-align: center; font-size: 12px; line-height: 1.5; margin: 24px 8px; }
 
@@ -80,5 +101,7 @@ button.mini { padding: 3px 9px; font-size: 11px; }
 @media (max-width: 330px) {
   .model-filter-row { margin-left: 0; }
   .ph-title span { display: none; }
+  .runtime-content { padding-left: 14px; }
+  .runtime-summary { max-width: 58%; }
   #runInfo { max-width: 46%; }
 }
