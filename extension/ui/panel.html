@@ -20,7 +20,7 @@
   </section>
 
   <main class="chat" id="chat">
-    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and act on it.</div>
+    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and, when enabled, act on it.</div>
   </main>
 
   <footer class="composer">
@@ -32,12 +32,16 @@
       </label>
       <button id="refreshModels" class="icon-btn" title="Refresh model list">↻</button>
     </div>
+    <div class="model-filter-row">
+      <input type="search" id="modelFilter" placeholder="Filter models or providers…" autocomplete="off" />
+      <span id="modelCount" class="muted"></span>
+    </div>
     <div class="composer-row">
-      <textarea id="prompt" rows="1" placeholder="Message Hermes…  (attach page context sends a live snapshot)"></textarea>
+      <textarea id="prompt" rows="1" placeholder="Message Hermes…"></textarea>
       <button id="send" class="primary">Send</button>
     </div>
     <div class="attachbar">
-      <label class="check" title="Include a fresh page snapshot in every message">
+      <label class="check" title="Include a fresh page snapshot in this message">
         <input type="checkbox" id="autoSnap" checked /> attach page
       </label>
       <span class="spacer"></span>
