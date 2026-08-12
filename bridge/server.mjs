@@ -234,6 +234,7 @@ function actionReadyToMirror(action) {
   if (action.name === 'key') return Boolean(params.keys);
   if (action.name === 'grep' || action.name === 'find') return Boolean(params.pattern);
   if (action.name === 'evaluate') return Boolean(params.expression);
+  if (action.name === 'run') return Array.isArray(params.actions) && params.actions.length > 0;
   if (action.name === 'fill_many') return Array.isArray(params.fields) && params.fields.length > 0;
   if (action.name === 'drag') return Boolean(params.ref && params.targetRef);
   if (action.name === 'click_at' || action.name === 'hover_at') {
@@ -268,7 +269,7 @@ function workingBrowserBlock(pin) {
     `You are already inside the user's real Chrome (${where || 'attached tab'}).\n` +
     `This attached tab is your only browser. Do all reading and clicking here.\n` +
     `Do not open Hermes' internal browser, a headless browser, Browserbase, or another window.\n` +
-    `Do not call web_search, web_extract, browser_navigate, or browser_new_page unless the user explicitly asks to leave this tab.\n` +
+    `Do not call web_search, web_extract, browser_navigate, browser_new_page, or browser_exec Python unless the user explicitly asks to leave this tab.\n` +
     `If you need more of THIS page, use browser_snapshot, browser_page_content, browser_read, browser_scroll, browser_grep, browser_click, or browser_type. The companion runs those in the attached tab.`
   );
 }
@@ -336,6 +337,13 @@ function rewriteOffTabTool(toolName, args, pin, input) {
   const n = canonicalToolName(toolName);
   if (n === 'web_search' || n === 'web_extract') {
     return stayOnPageAction(args.query || args.q || args.url || args.text || args.pattern);
+  }
+  if (n === 'browser_exec' || n === 'browser_run') {
+    const coerced = coerceRunOrExec(args || {});
+    if (!coerced) return stayOnPageAction(args.query || args.q || args.pattern || '');
+    if (coerced.name === 'evaluate' || coerced.name === 'run') return coerced;
+    if (coerced.name === 'snapshot') return coerced;
+    return stayOnAttachedTab(coerced, pin, input);
   }
   return null;
 }
@@ -630,6 +638,68 @@ function withCompanionCatalog(runtime = {}) {
   };
 }
 
+function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || !(text.startsWith('[') || text.startsWith('{'))) return value;
+  try { return JSON.parse(text); } catch { return value; }
+}
+
+function looksLikeJsExpression(code) {
+  const src = String(code || '').trim();
+  if (!src) return false;
+  if (/\b(def |import |from |print\(|new_tab\(|page_info\(|start_remote_daemon)\b/.test(src)) return false;
+  return /\b(document|window|location|querySelector|innerText|textContent)\b/.test(src)
+    || /^(document|window|location)\b/.test(src);
+}
+
+function extractActionList(args = {}) {
+  for (const key of ['actions', 'steps', 'commands', 'ops', 'batch', 'tasks', 'sequence']) {
+    const parsed = parseMaybeJson(args[key]);
+    if (Array.isArray(parsed) && parsed.length) return parsed;
+    if (parsed && typeof parsed === 'object' && (parsed.name || parsed.action)) return [parsed];
+  }
+  return [];
+}
+
+function isRunWrapperName(name = '') {
+  return /^(browser[_-]?)?(run|exec)$/i.test(String(name || '').trim());
+}
+
+function normalizeCompanionAction(name, args) {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+  return normalizeBrowserTool(raw, args)
+    || (!/^browser[_-]/i.test(raw) ? normalizeBrowserTool(`browser_${raw}`, args) : null);
+}
+
+/** Hermes browser_exec takes Python {code}; models also send a single action or empty args. */
+function coerceRunOrExec(args = {}) {
+  const list = extractActionList(args);
+  if (list.length === 1) {
+    const only = list[0] && typeof list[0] === 'object' ? list[0] : { name: list[0] };
+    const name = only.name || only.action || only.tool;
+    if (name && !isRunWrapperName(name)) {
+      return normalizeCompanionAction(name, only.params || only.payload || only.args || only)
+        || { name: String(name).replace(/^browser[_-]?/i, ''), params: only.params || only };
+    }
+  }
+  if (list.length > 1) return { name: 'run', params: { actions: list } };
+
+  const expr = args.expression || args.js;
+  const code = args.code || args.script || args.python;
+  if (expr && looksLikeJsExpression(expr)) return { name: 'evaluate', params: { expression: expr } };
+  if (code && looksLikeJsExpression(code)) return { name: 'evaluate', params: { expression: code } };
+  if (code || expr) return { name: 'snapshot', params: {} };
+
+  const singleName = args.name || args.action || args.tool;
+  if (singleName && !isRunWrapperName(singleName)) {
+    return normalizeCompanionAction(singleName, args.params || args.payload || args)
+      || { name: String(singleName).replace(/^browser[_-]?/i, ''), params: args.params || args };
+  }
+  return { name: 'snapshot', params: {} };
+}
+
 function normalizeBrowserTool(name, args = {}) {
   const raw = String(name || '').trim().toLowerCase();
   const n = canonicalToolName(raw);
@@ -733,7 +803,7 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'upload', params: args };
     case 'browser_run':
     case 'browser_exec':
-      return { name: 'run', params: args };
+      return coerceRunOrExec(args);
     case 'browser_cdp':
       return { name: 'cdp_info', params: args };
     case 'browser_hold_click':
@@ -1070,7 +1140,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_console(level?, limit?)',
     'browser_dialog(action=accept|dismiss|observe, text?)',
     'browser_cdp()',
-    'browser_exec(actions[])',
+    'browser_run(actions:[{name, params}])',
     'browser_hold_click(@eN, ms?)',
     'browser_network(limit?)',
     'browser_clipboard(action=read|write, text?)',
@@ -1107,8 +1177,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_zoom(action=get|set|reset, factor?)',
     'browser_screenshot(format?)',
     'browser_pdf()',
-    'browser_upload(@eN, file)',
-    'browser_run(actions[])'
+    'browser_upload(@eN, file)'
   ];
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +

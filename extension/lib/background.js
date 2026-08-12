@@ -429,6 +429,42 @@ function safeNavigationUrl(value, base) {
   }
 }
 
+function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || !(text.startsWith('[') || text.startsWith('{'))) return value;
+  try { return JSON.parse(text); } catch { return value; }
+}
+
+function looksLikeJsExpression(code) {
+  const src = String(code || '').trim();
+  if (!src) return false;
+  if (/\b(def |import |from |print\(|new_tab\(|page_info\(|start_remote_daemon)\b/.test(src)) return false;
+  return /\b(document|window|location|querySelector|innerText|textContent)\b/.test(src)
+    || /^(document|window|location)\b/.test(src);
+}
+
+function extractRunActions(params = {}) {
+  for (const key of ['actions', 'steps', 'commands', 'ops', 'batch', 'tasks', 'sequence']) {
+    const parsed = parseMaybeJson(params[key]);
+    if (Array.isArray(parsed) && parsed.length) return parsed.map(normalizeRunStep);
+    if (parsed && typeof parsed === 'object' && (parsed.name || parsed.action)) return [normalizeRunStep(parsed)];
+  }
+  const name = params.name || params.action || params.tool;
+  if (name && !/^(browser[_-]?)?(run|exec)$/i.test(String(name))) {
+    return [{ name, params: params.params || params.payload || params.args || params }];
+  }
+  return [];
+}
+
+function normalizeRunStep(step) {
+  if (!step || typeof step !== 'object') return { name: String(step || ''), params: {} };
+  return {
+    name: step.name || step.action || step.tool || '',
+    params: step.params || step.payload || step.args || step
+  };
+}
+
 async function runNativeTabAction(name, params, tabId, depth = 0) {
   switch (name) {
     case 'navigate': case 'goto': case 'open': {
@@ -511,8 +547,16 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
       return { ok: false, error: 'Upload requires a user-selected file; use the page file input or setInputFiles flow' };
     }
     case 'run': {
-      const actions = Array.isArray(params.actions) ? params.actions : [];
-      if (!actions.length) return { ok: false, error: 'run requires actions[]' };
+      const actions = extractRunActions(params);
+      if (!actions.length) {
+        const expr = params.expression || params.js || '';
+        const code = params.code || params.script || params.python || '';
+        if (looksLikeJsExpression(expr) || looksLikeJsExpression(code)) {
+          return runActionOnTab({ name: 'evaluate', params: { expression: expr || code } }, tabId, depth + 1);
+        }
+        return runActionOnTab({ name: 'snapshot', params: {} }, tabId, depth + 1);
+      }
+      if (actions.length === 1) return runActionOnTab(actions[0], tabId, depth + 1);
       const results = [];
       for (const action of actions) results.push(await runActionOnTab(action, tabId, depth + 1));
       return { ok: results.every((result) => result?.ok !== false), value: results };

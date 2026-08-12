@@ -100,6 +100,15 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('RUN_SHAPE_PROBE')) {
+      emit('tool_call', { tool_call_id: 'trun1', name: 'browser_run', args: { name: 'click', selector: '@e1' } });
+      emit('tool_call', { tool_call_id: 'trun2', name: 'browser_run', args: { steps: [{ action: 'read', selector: 'h1' }] } });
+      emit('tool_call', { tool_call_id: 'trun3', name: 'browser_exec', args: { code: 'print(page_info())\nnew_tab("https://example.com")' } });
+      emit('tool_call', { tool_call_id: 'trun4', name: 'browser_exec', args: { expression: 'document.title' } });
+      emit('done', {});
+      res.end();
+      return;
+    }
     if (prompt.includes('ATTACH_STAY_PROBE')) {
       emit('tool_call', { tool_call_id: 'ts1', name: 'web_search', args: { query: 'example domain' } });
       emit('tool_call', { tool_call_id: 'ts2', name: 'browser_navigate', args: { url: 'https://www.google.com/search?q=example' } });
@@ -402,6 +411,31 @@ async function main() {
   ok(!stayActions.some((msg) => msg.action?.name === 'navigate' && /google|bing/i.test(String(msg.action?.params?.url || ''))), 'search-engine navigate is not sent to another browser');
   ok(!stayActions.some((msg) => msg.action?.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(msg.action?.params?.action || ''))), 'new-page is not opened while a tab is attached');
   ok(stayActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'leave-tab tools stay on the attached page');
+
+  const beforeRun = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      attachPage: true,
+      attachedTab: { id: 42, url: 'https://example.com/attached', title: 'Attached' },
+      context: [{
+        type: 'page_context',
+        url: 'https://example.com/attached',
+        title: 'Attached',
+        tabId: 42,
+        document: '<h1>Stay here</h1>'
+      }],
+      messages: [{ role: 'user', content: 'RUN_SHAPE_PROBE use the attached tab' }]
+    })
+  })).text();
+  const runActions = companionActions.slice(beforeRun);
+  ok(runActions.some((msg) => msg.action?.name === 'click' && String(msg.action?.params?.selector || '').includes('e1')), 'browser_run with a single action unwraps to that action');
+  ok(runActions.some((msg) => msg.action?.name === 'read' && msg.action?.params?.selector === 'h1'), 'browser_run steps[] is accepted as a batch item');
+  ok(runActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'browser_exec Python stays on the attached tab instead of failing');
+  ok(runActions.some((msg) => msg.action?.name === 'evaluate' && msg.action?.params?.expression === 'document.title'), 'browser_exec JS expression is mirrored as evaluate');
+  ok(!runActions.some((msg) => msg.action?.name === 'run' && !(msg.action?.params?.actions || []).length), 'empty run is not dispatched');
 
   const conflict = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',
