@@ -182,10 +182,13 @@ export class HermesClient extends EventEmitter {
     }
     this._sessionId = sessionId;
 
-    const modelProvider = extra.modelProvider || this.modelProvider;
+    let modelProvider = extra.modelProvider || this.modelProvider;
     let model = extra.model || this.model;
     const qualified = String(model).match(/^@([^:]+):(.+)$/);
-    if (qualified && (!modelProvider || qualified[1] === modelProvider)) model = qualified[2];
+    if (qualified) {
+      modelProvider = qualified[1];
+      model = qualified[2];
+    }
     const body = {
       session_id: sessionId,
       message,

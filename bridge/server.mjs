@@ -58,6 +58,15 @@ const hermesSessions = new Map();
 const MAX_THREAD_STATE = 32;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
+function sessionIdForThread(threadId, model, provider) {
+  const row = hermesSessions.get(threadId);
+  if (!row) return undefined;
+  if (typeof row === 'string') return row;
+  const sameModel = !model || !row.model || String(row.model) === String(model);
+  const sameProvider = !provider || !row.provider || String(row.provider) === String(provider);
+  return sameModel && sameProvider ? row.sessionId : undefined;
+}
+
 function rememberThread(map, key, value) {
   if (!key) return;
   if (map.has(key)) map.delete(key);
@@ -845,9 +854,15 @@ async function runAgent(threadId, runId, input, res) {
       modelProvider: input.modelProvider,
       workspace: input.workspace,
       attached: attachPin(input, threadId).attached,
-      sessionId: hermesSessions.get(threadId) || undefined
+      sessionId: sessionIdForThread(threadId, input.model, input.modelProvider)
     });
-    if (threadId && sessionId) rememberThread(hermesSessions, threadId, sessionId);
+    if (threadId && sessionId) {
+      rememberThread(hermesSessions, threadId, {
+        sessionId,
+        model: input.model || '',
+        provider: input.modelProvider || ''
+      });
+    }
     const req = res.req;
     cancelIfClientGone = () => {
       if (!res.writableEnded) hermes.cancelStream(streamId).catch(() => {});
@@ -858,30 +873,51 @@ async function runAgent(threadId, runId, input, res) {
     const toolAccum = new Map();
     const announcedTools = new Set();
     const mirroredTools = new Set();
+    let sawVisibleText = false;
+
+    const takeText = (payload) => {
+      if (payload == null) return '';
+      if (typeof payload === 'string') return payload;
+      return String(payload.text || payload.delta || payload.content || payload.output || payload.message || '');
+    };
 
     for await (const { event, data, final } of readSSE(stream)) {
       if (final) break;
       if (!data) continue;
 
-      if (event === 'token' && typeof data.text === 'string') {
-        res.write(sse(textDelta(messageId, data.text)));
+      const eventName = String(event || data.type || '').toLowerCase();
+      if ((eventName === 'token' || eventName === 'interim_assistant' || eventName === 'assistant' || eventName === 'text' || eventName === 'output') && !data.already_streamed) {
+        const chunk = takeText(data);
+        if (chunk) {
+          sawVisibleText = true;
+          res.write(sse(textDelta(messageId, chunk)));
+        }
         continue;
       }
-      if (event === 'reasoning') {
+      if (eventName === 'reasoning' || eventName === 'thinking') {
         // Never expose raw hidden reasoning; expose lifecycle only.
         res.write(sse(custom('agent-status', { phase: 'reasoning', label: 'Reasoning…' })));
         continue;
       }
-      if (event === 'metering') {
+      if (eventName === 'metering') {
         res.write(sse(custom('metering', { data })));
         continue;
       }
-      if (event === 'context_status') {
+      if (eventName === 'context_status') {
         res.write(sse(custom('context-status', { data })));
         continue;
       }
+      if (eventName === 'apperror' || eventName === 'error' || eventName === 'warning') {
+        const detail = takeText(data) || data.error || 'Hermes reported an error';
+        res.write(sse(custom('agent-status', { phase: 'error', label: String(detail).slice(0, 180) })));
+        if (!sawVisibleText) {
+          sawVisibleText = true;
+          res.write(sse(textDelta(messageId, `[Hermes] ${detail}`)));
+        }
+        continue;
+      }
 
-      if (event === 'tool_call' || data.type === 'tool_call' || (data.name && data.args !== undefined)) {
+      if (eventName === 'tool' || eventName === 'tool_call' || data.type === 'tool_call' || (data.name && data.args !== undefined)) {
         const tcid = data.tool_call_id || data.id || uid('tool_');
         const name = data.name || data.tool_name || toolAccum.get(tcid)?.name || '';
         const args = data.args ?? data.arguments ?? {};
@@ -905,9 +941,12 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
 
-      if (event === 'done' || event === 'complete' || data.done) break;
+      if (eventName === 'done' || eventName === 'complete' || eventName === 'stream_end' || data.done) break;
     }
 
+    if (!sawVisibleText) {
+      res.write(sse(textDelta(messageId, 'The selected model returned no visible text. Try another model, or press Stop and send again.')));
+    }
     res.write(sse(textEnd(messageId)));
 
     for (const [tcid, tool] of toolAccum) {
@@ -1063,7 +1102,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     (attached
       ? 'You are already in the attached Chrome tab. Use @e1 refs and companion-mirrored browser tools on THAT tab only. Do not open another browser. Search/navigate-away calls are rewritten onto this tab. '
       : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
-    'Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
+    'Answer the user in plain language first. Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );
 
   if (attached) parts.unshift(workingBrowserBlock(pin));

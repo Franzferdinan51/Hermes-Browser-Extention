@@ -79,6 +79,18 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('INTERIM_ASSISTANT_PROBE')) {
+      emit('interim_assistant', { text: 'Visible via interim_assistant.' });
+      emit('done', {});
+      res.end();
+      return;
+    }
+    if (prompt.includes('EMPTY_MODEL_PROBE')) {
+      emit('reasoning', { text: 'thinking only' });
+      emit('done', {});
+      res.end();
+      return;
+    }
     if (prompt.includes('ATTACH_STAY_PROBE')) {
       emit('tool_call', { tool_call_id: 'ts1', name: 'web_search', args: { query: 'example domain' } });
       emit('tool_call', { tool_call_id: 'ts2', name: 'browser_navigate', args: { url: 'https://www.google.com/search?q=example' } });
@@ -381,6 +393,32 @@ async function main() {
   ok(cancelledStreamIds.includes('stuck_stream'), 'a stuck Hermes stream is cancelled before retrying chat/start');
   ok(conflictBody.includes('"RUN_STARTED"') && conflictBody.includes('Hello '), 'chat recovers after a 409 active-stream conflict');
   ok(!conflictBody.includes('session already has an active stream'), '409 conflict is not surfaced as a failed run');
+
+  const interim = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'INTERIM_ASSISTANT_PROBE' }] })
+  })).text();
+  ok(interim.includes('Visible via interim_assistant.'), 'models that stream interim_assistant still produce visible text');
+
+  const empty = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'EMPTY_MODEL_PROBE' }] })
+  })).text();
+  ok(empty.includes('returned no visible text'), 'a silent model still gets a visible fallback instead of an empty reply');
+
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      model: '@nous:hidden-id',
+      modelProvider: 'lmstudio',
+      messages: [{ role: 'user', content: 'MODEL_ID_PROBE' }]
+    })
+  })).text();
+  ok(lastChatStartPayload?.model === 'hidden-id' && lastChatStartPayload?.model_provider === 'nous', 'qualified @provider:model ids are sent as the model plus its provider');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();
