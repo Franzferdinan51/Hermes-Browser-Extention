@@ -387,7 +387,9 @@ async function chat(userText, opts = {}) {
   const shouldAttachPage = typeof opts.attachPage === 'boolean' ? opts.attachPage : cfg.attachPageContext !== false;
   if (shouldAttachPage) {
     let snapshot = null;
-    try { snapshot = await snapshotTab(opts.tabId); } catch {}
+    try { snapshot = await snapshotTab(opts.tabId); } catch (error) {
+      emit('page-context-status', { ok: false, error: String(error) });
+    }
     if (snapshot?.snapshot) {
       const dom = snapshot.snapshot.dom || '';
       // MAIN-world inline fallback exposes .text instead of .dom; surface it so
@@ -405,6 +407,9 @@ async function chat(userText, opts = {}) {
         interactive,
         time: Date.now()
       }];
+      emit('page-context-status', { ok: true, url: snapshot.url, title: snapshot.title, interactive: interactive.length });
+    } else if (shouldAttachPage) {
+      emit('page-context-status', { ok: false, error: 'Could not read the active page. It may be a restricted browser page.' });
     }
   }
 
@@ -564,6 +569,7 @@ relay.addEventListener('agui-event', (e) => relayToPorts('event', { event: e.det
 relay.addEventListener('run-start', (e) => relayToPorts('run-start', { text: e.detail.userText }));
 relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, error: e.detail.error }));
 relay.addEventListener('page-snapshot', (e) => relayToPorts('page-snapshot', { snapshot: e.detail }));
+relay.addEventListener('page-context-status', (e) => relayToPorts('page-context-status', e.detail));
 relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.detail));
 relay.addEventListener('agent-state', (e) => relayToPorts('agent-state', e.detail));
 relay.addEventListener('runtime', (e) => relayToPorts('runtime', { runtime: e.detail }));

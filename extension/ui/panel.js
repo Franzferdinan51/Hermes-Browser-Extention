@@ -525,6 +525,9 @@ function connectPort() {
       busy = false;
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
       updatePageBar();
+    } else if (m.kind === 'page-context-status') {
+      if (m.ok) runLabel(`Page attached · ${m.interactive || 0} controls`);
+      else runLabel('Page context unavailable');
     } else if (m.kind === 'bridge-status') {
       bridgeConnected = Boolean(m.connected);
       if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
