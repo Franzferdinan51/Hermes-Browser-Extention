@@ -108,6 +108,7 @@ function json(res, status, value) {
 const wsClients = new Set();
 const pendingToolResults = new Map();
 const mirrorStreams = new Map();
+const threadMirrorResults = new Map();
 
 function wsSend(obj) {
   let sent = 0;
@@ -146,6 +147,16 @@ function resolveToolResult(payload = {}) {
   }
   if (mirror) {
     mirrorStreams.delete(requestId);
+    const history = threadMirrorResults.get(mirror.threadId) || [];
+    history.push({
+      requestId,
+      toolCallId: mirror.toolCallId,
+      toolName: mirror.toolName,
+      ok: payload.result?.ok !== false,
+      result: payload.result || payload,
+      timestamp: Date.now()
+    });
+    threadMirrorResults.set(mirror.threadId, history.slice(-8));
     if (!mirror.res.writableEnded) {
       mirror.res.write(sse(custom('tool-result', {
         requestId,
@@ -158,7 +169,7 @@ function resolveToolResult(payload = {}) {
   return true;
 }
 
-function mirrorBrowserAction(toolCallId, tool, res, mirroredTools) {
+function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools) {
   if (!isBrowserCompanionTool(tool.name) || mirroredTools.has(toolCallId)) return;
   let args;
   try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
@@ -169,7 +180,7 @@ function mirrorBrowserAction(toolCallId, tool, res, mirroredTools) {
   const requestId = uid('browser_');
   const sent = wsSend({ kind: 'browser-action', requestId, toolCallId, action });
   if (sent) {
-    mirrorStreams.set(requestId, { res, toolCallId });
+    mirrorStreams.set(requestId, { res, threadId, toolCallId, toolName: tool.name });
     setTimeout(() => mirrorStreams.delete(requestId), 120_000);
   }
   res.write(sse(custom('agent-status', {
@@ -310,7 +321,7 @@ async function runAgent(threadId, runId, input, res) {
         if (typeof args === 'string') existing.args += args;
         else existing.args = args;
         toolAccum.set(tcid, existing);
-        mirrorBrowserAction(tcid, existing, res, mirroredTools);
+        mirrorBrowserAction(threadId, tcid, existing, res, mirroredTools);
 
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
@@ -375,6 +386,11 @@ function buildHermesPrompt(input) {
     else if (role === 'assistant') parts.push(`[ASSISTANT]\n${content}`);
     else if (role === 'system') parts.push(`[SYSTEM]\n${content}`);
     else if (role === 'user') parts.push(`[USER REQUEST]\n${content}`);
+  }
+
+  const mirrorResults = threadMirrorResults.get(input.threadId) || [];
+  if (mirrorResults.length) {
+    parts.push(`[VERIFIED ACTIVE TAB RESULTS]\n${mirrorResults.map((item) => `- ${item.toolName || 'browser tool'}: ${JSON.stringify(item.result)}`).join('\n')}`);
   }
 
   // Keep this list aligned with Hermes' current core browser tool reference.

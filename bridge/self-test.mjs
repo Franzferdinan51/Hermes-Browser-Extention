@@ -236,12 +236,24 @@ async function main() {
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 
+  const firstChatPrompt = String(lastChatStartPayload?.message || '');
+  const followup = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes', threadId: 'thread_t1', runId: 'run_t2',
+      messages: [{ role: 'user', content: 'What happened in the active tab?' }]
+    })
+  });
+  await followup.text();
+
   // Prompt contract.
   const sentMessage = String(lastChatStartPayload?.message || '');
-  ok(sentMessage.includes('[USER REQUEST]\nsummarize this page'), 'Hermes prompt includes current user message');
-  ok(sentMessage.includes('[PAGE CONTEXT]') && sentMessage.includes('https://example.com'), 'Hermes prompt includes page context');
-  ok(sentMessage.includes('browser_click(@eN)') && sentMessage.includes('browser_console()') && sentMessage.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
-  ok(!sentMessage.includes('browser_hover(') && !sentMessage.includes('browser_wait('), 'prompt does not advertise extension-only helpers as Hermes tools');
+  ok(firstChatPrompt.includes('[USER REQUEST]\nsummarize this page'), 'Hermes prompt includes current user message');
+  ok(firstChatPrompt.includes('[PAGE CONTEXT]') && firstChatPrompt.includes('https://example.com'), 'Hermes prompt includes page context');
+  ok(sentMessage.includes('[VERIFIED ACTIVE TAB RESULTS]') && sentMessage.includes('Fake active tab'), 'next turn receives verified active-tab result');
+  ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console()') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
+  ok(!firstChatPrompt.includes('browser_hover(') && !firstChatPrompt.includes('browser_wait('), 'prompt does not advertise extension-only helpers as Hermes tools');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();

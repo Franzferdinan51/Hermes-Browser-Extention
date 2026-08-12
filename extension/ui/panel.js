@@ -589,9 +589,9 @@ function providerName(m) {
 
 function renderModels() {
   const select = $('modelSelect');
-  const filter = $('modelFilter').value.trim().toLowerCase();
+  const filter = $('modelFilter')?.value.trim().toLowerCase() || '';
   const visible = allModels.filter((m) => !filter || `${m.id} ${m.label} ${m.provider} ${m.providerLabel}`.toLowerCase().includes(filter));
-  $('modelCount').textContent = `${visible.length}/${allModels.length}`;
+  if ($('modelCount')) $('modelCount').textContent = `${visible.length}/${allModels.length}`;
   select.innerHTML = '';
 
   if (!visible.length) {
@@ -630,7 +630,7 @@ async function loadModels(selected, provider) {
   selectedModelId = selected || selectedModelId;
   selectedProvider = provider || selectedProvider;
   $('modelSelect').innerHTML = '<option>Loading models…</option>';
-  $('modelCount').textContent = '…';
+  if ($('modelCount')) $('modelCount').textContent = '…';
   const r = await chrome.runtime.sendMessage({ kind: 'get-models' }).catch(() => null);
   const raw = r?.ok ? (r.data || []) : [];
   allModels = raw.map(normalizeModel).filter((m) => m.id);
@@ -719,7 +719,7 @@ $('refreshRuntime').addEventListener('click', (event) => {
   loadRuntime(true).catch(() => {});
 });
 $('modelSelect').addEventListener('change', chooseModel);
-$('modelFilter').addEventListener('input', renderModels);
+if ($('modelFilter')) $('modelFilter').addEventListener('input', renderModels);
 $('refreshModels').addEventListener('click', () => loadModels(selectedModelId || config?.model, selectedProvider || config?.modelProvider));
 
 (async () => {
