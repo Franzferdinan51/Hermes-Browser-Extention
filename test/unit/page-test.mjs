@@ -211,6 +211,22 @@ async function drive() {
   ok(linkRes.ok && linkRes.count >= 2 && linkRes.value.some((item) => String(item.href).includes('/about')), 'actor extracts page links');
   const searchDom = await actor.runAction({ name: 'search_dom', params: { text: 'Buy Now' } });
   ok(searchDom.ok && searchDom.count >= 1, 'actor searches DOM text');
+  const holdRes = await actor.runAction({ name: 'hold_click', params: { selector: '@' + refButton.ref, ms: 50 } });
+  ok(holdRes.ok, 'actor hold-clicks Hermes ref');
+  const findRes = await actor.runAction({ name: 'find', params: { text: 'Welcome' } });
+  ok(findRes.ok && findRes.count >= 1, 'actor finds visible text');
+  const netRes = await actor.runAction({ name: 'network', params: { limit: 10 } });
+  ok(netRes.ok && Array.isArray(netRes.value), 'actor returns network resource timing');
+  const cdpRes = await actor.runAction({ name: 'cdp_info', params: {} });
+  ok(cdpRes.ok && String(cdpRes.value?.url || '').includes('example.com'), 'actor returns CDP-lite page info');
+  const formsRes = await actor.runAction({ name: 'forms', params: {} });
+  ok(formsRes.ok && formsRes.count >= 1, 'actor lists page forms');
+  const metaRes = await actor.runAction({ name: 'meta', params: {} });
+  ok(metaRes.ok && String(metaRes.value?.title || '').includes('Test Page'), 'actor reads page meta');
+  const countRes = await actor.runAction({ name: 'count', params: { selector: 'button' } });
+  ok(countRes.ok && countRes.value >= 2, 'actor counts matching elements');
+  const visibleRes = await actor.runAction({ name: 'visible', params: { selector: 'h1' } });
+  ok(visibleRes.ok && visibleRes.value?.visible === true, 'actor reports element visibility');
 
   const missing = await actor.runAction({ name: 'click', params: { selector: '#does-not-exist' } });
   ok(!missing.ok, 'actor returns error for missing element');

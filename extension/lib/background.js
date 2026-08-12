@@ -42,12 +42,31 @@ function isRestrictedUrl(url = '') {
   return /^(chrome|edge|brave|opera|about|devtools|chrome-extension|moz-extension):/i.test(String(url || ''));
 }
 
-async function getPageTab(preferredId) {
-  const tryId = preferredId || ownedTabId;
+function pinOwnedTab(tab) {
+  if (tab?.id == null) return;
+  ownedTabId = tab.id;
+  try {
+    chrome.storage?.session?.set({
+      hermesOwnedTabId: tab.id,
+      hermesOwnedTabUrl: tab.url || '',
+      hermesOwnedTabTitle: tab.title || ''
+    });
+  } catch {}
+}
+
+function clearOwnedTab() {
+  ownedTabId = null;
+  try { chrome.storage?.session?.remove(['hermesOwnedTabId', 'hermesOwnedTabUrl', 'hermesOwnedTabTitle']); } catch {}
+}
+
+async function getPageTab(preferredId, opts = {}) {
+  const tryId = preferredId != null ? preferredId : ownedTabId;
   if (tryId != null) {
     const tab = await chrome.tabs.get(tryId).catch(() => null);
     if (tab?.id != null && !isRestrictedUrl(tab.url)) return tab;
+    if (opts.pinned) return null;
   }
+  if (opts.pinned) return null;
   const queries = [
     { active: true, lastFocusedWindow: true },
     { active: true, currentWindow: true }
@@ -69,8 +88,9 @@ function persistThreadId(id) {
 
 async function restoreThreadId() {
   try {
-    const stored = await chrome.storage?.session?.get('hermesThreadId');
+    const stored = await chrome.storage?.session?.get(['hermesThreadId', 'hermesOwnedTabId']);
     if (stored?.hermesThreadId) currentThreadId = String(stored.hermesThreadId);
+    if (stored?.hermesOwnedTabId != null) ownedTabId = Number(stored.hermesOwnedTabId);
   } catch {}
 }
 restoreThreadId();
@@ -170,11 +190,13 @@ function connectBridgeWs() {
       try { msg = JSON.parse(event.data); } catch { return; }
       if (msg.kind !== 'browser-action') return;
 
+      const preferredId = msg.tabId ?? msg.action?.params?.tabId ?? ownedTabId;
+      const pinned = preferredId != null;
       let tab = null;
-      try { tab = await getPageTab(); } catch {}
+      try { tab = await getPageTab(preferredId, { pinned }); } catch {}
       let result = { ok: false, error: 'no attached page tab' };
       if (tab?.id != null) {
-        ownedTabId = tab.id;
+        pinOwnedTab(tab);
         result = await runActionOnTab(msg.action, tab.id);
       }
 
@@ -211,11 +233,13 @@ async function getActiveTab() {
 // ---------------------------------------------------------------------------
 // Page context and browser actions
 // ---------------------------------------------------------------------------
-async function snapshotTab(tabId) {
-  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await getPageTab();
+async function snapshotTab(tabId, opts = {}) {
+  const tab = tabId
+    ? await chrome.tabs.get(tabId).catch(() => null)
+    : await getPageTab(undefined, { pinned: opts.fresh ? false : ownedTabId != null });
   if (!tab?.id) throw new Error('No tab');
   if (isRestrictedUrl(tab.url)) throw new Error('Cannot attach a restricted browser page');
-  ownedTabId = tab.id;
+  pinOwnedTab(tab);
 
   // Primary: try the pre-declared content script (isolated world).
   let resp = await chrome.tabs.sendMessage(tab.id, { kind: 'read-page' }).catch(() => null);
@@ -444,10 +468,8 @@ async function runActionOnTab(action, tabId, depth = 0) {
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
-let runCanceled = false;
-
-function abortedResult() {
-  if (client) {
+function abortedResult(generation) {
+  if (client && (generation == null || client.activeGeneration === generation)) {
     client.busy = false;
     client.cancelRequested = false;
     client.abort = null;
@@ -457,14 +479,13 @@ function abortedResult() {
 }
 
 async function chat(userText, opts = {}) {
-  runCanceled = false;
   if (!client) client = await buildClient();
-  client.prepareRun();
+  const generation = client.prepareRun();
   if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) connectBridgeWs();
-  if (runCanceled || client.wasCanceled()) return abortedResult();
+  if (client.wasCanceled(generation)) return abortedResult(generation);
 
   const cfg = await store.get();
-  if (runCanceled || client.wasCanceled()) return abortedResult();
+  if (client.wasCanceled(generation)) return abortedResult(generation);
 
   const extra = {};
   const requestedModel = opts.model || cfg.model;
@@ -504,10 +525,10 @@ async function chat(userText, opts = {}) {
       emit('page-context-status', { ok: false, error: 'Could not read the active page. It may be a restricted browser page.' });
     }
   }
-  if (runCanceled || client.wasCanceled()) return abortedResult();
+  if (client.wasCanceled(generation)) return abortedResult(generation);
 
   emit('run-start', { userText });
-  if (runCanceled || client.wasCanceled()) return abortedResult();
+  if (client.wasCanceled(generation)) return abortedResult(generation);
 
   try {
     const input = {
@@ -519,15 +540,18 @@ async function chat(userText, opts = {}) {
       ],
       ...extra
     };
-    const result = await client.runAgent(input);
+    const result = await client.runAgent(input, { generation });
     if (result.state?.threadId) persistThreadId(result.state.threadId);
     else if (input.threadId) persistThreadId(input.threadId);
     emit('run-end', { ok: true, result });
     return result;
   } catch (e) {
     const aborted = e?.name === 'AbortError' || /abort/i.test(String(e?.message || e));
-    emit('run-end', { ok: false, aborted, error: aborted ? 'stopped' : String(e) });
-    if (aborted) return { aborted: true };
+    if (aborted) {
+      if (client.activeGeneration === generation) emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+      return { aborted: true };
+    }
+    emit('run-end', { ok: false, aborted: false, error: String(e) });
     throw e;
   }
 }
@@ -569,14 +593,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'abort-run': {
-      runCanceled = true;
-      const aborted = client?.abortRun ? client.abortRun() : true;
-      emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+      const aborted = client?.abortRun ? client.abortRun(client.activeGeneration) : false;
+      emit('run-end', { ok: false, aborted: Boolean(aborted), error: 'stopped' });
       sendResponse({ ok: true, aborted: Boolean(aborted) });
       return true;
     }
     case 'read-page': {
-      snapshotTab(msg.tabId).then((snap) => sendResponse({ ok: !!snap, snapshot: snap })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+      snapshotTab(msg.tabId, { fresh: msg.fresh !== false }).then((snap) => sendResponse({ ok: !!snap, snapshot: snap })).catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     case 'run-action': {
@@ -624,6 +647,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         threadId: currentThreadId,
         snapshot: lastSnapshot,
+        ownedTabId,
         runtime: lastRuntime,
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN
@@ -639,8 +663,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'tab-changed': {
-      lastSnapshot = null;
-      emit('tab-changed', { url: msg.url, title: msg.title });
+      const senderTabId = sender.tab?.id;
+      if (senderTabId == null || senderTabId === ownedTabId) {
+        lastSnapshot = null;
+        emit('tab-changed', { url: msg.url, title: msg.title, tabId: senderTabId });
+      }
       sendResponse({ ok: true });
       return true;
     }
@@ -678,14 +705,24 @@ function relayToPorts(type, payload) {
 }
 relay.addEventListener('agui-event', (e) => relayToPorts('event', { event: e.detail }));
 relay.addEventListener('run-start', (e) => relayToPorts('run-start', { text: e.detail.userText }));
-relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, error: e.detail.error }));
+relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, aborted: e.detail.aborted, error: e.detail.error }));
 relay.addEventListener('page-snapshot', (e) => relayToPorts('page-snapshot', { snapshot: e.detail }));
 relay.addEventListener('page-context-status', (e) => relayToPorts('page-context-status', e.detail));
 relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.detail));
 relay.addEventListener('agent-state', (e) => relayToPorts('agent-state', e.detail));
 relay.addEventListener('runtime', (e) => relayToPorts('runtime', { runtime: e.detail }));
 
+if (chrome.tabs?.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    if (tabId === ownedTabId) {
+      clearOwnedTab();
+      lastSnapshot = null;
+    }
+  });
+}
+
 chrome.action.onClicked.addListener((tab) => {
+  if (tab?.id != null && !isRestrictedUrl(tab.url)) pinOwnedTab(tab);
   if (chrome.sidePanel) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   if (chrome.sidePanel && tab.windowId != null) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
 });

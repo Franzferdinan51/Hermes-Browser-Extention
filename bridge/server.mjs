@@ -233,24 +233,142 @@ function actionReadyToMirror(action) {
   return true;
 }
 
-function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools) {
-  if (!isBrowserCompanionTool(tool.name) || mirroredTools.has(toolCallId)) return;
+function attachPin(input = {}) {
+  const pageContext = (input.context || []).find((ctx) => ctx.type === 'page_context' || ctx.document);
+  const tabId = pageContext?.tabId ?? input.attachedTab?.id ?? null;
+  return {
+    attached: Boolean(input.attachPage || pageContext || input.attachedTab),
+    tabId,
+    url: pageContext?.url || input.attachedTab?.url || '',
+    title: pageContext?.title || input.attachedTab?.title || ''
+  };
+}
+
+function lastUserText(input = {}) {
+  const messages = input.messages || [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const role = String(messages[i]?.role || '').toLowerCase();
+    if (role === 'user') {
+      const content = messages[i].content;
+      return typeof content === 'string' ? content : JSON.stringify(content || '');
+    }
+  }
+  return '';
+}
+
+function userAskedToLeaveAttachedTab(input = {}) {
+  return /\b(search the web|search online|google this|look(?:\s+it)?\s+up online|open (?:a )?new (?:tab|window|browser)|go to https?:\/\/|navigate to https?:\/\/|leave this (?:tab|page)|in another (?:tab|browser|window))\b/i
+    .test(lastUserText(input));
+}
+
+function isSearchEngineUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    const host = url.hostname.toLowerCase();
+    const href = url.href;
+    return /\/search/i.test(url.pathname) && /(^|\.)(google|bing|brave|yahoo|yandex|baidu|ecosia|startpage)\./.test(host)
+      || /(^|\.)duckduckgo\.com$/i.test(host)
+      || /google\.[^/]+\/search/i.test(href)
+      || /bing\.com\/search/i.test(href);
+  } catch {
+    return false;
+  }
+}
+
+function queryFromSearchUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.searchParams.get('q') || url.searchParams.get('query') || url.searchParams.get('p') || '';
+  } catch {
+    return '';
+  }
+}
+
+function samePageUrl(a, b) {
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    const path = (value) => value.replace(/\/$/, '');
+    return left.origin === right.origin && path(left.pathname) === path(right.pathname);
+  } catch {
+    return String(a || '') === String(b || '');
+  }
+}
+
+function stayOnPageAction(query) {
+  const pattern = String(query || '').trim();
+  return pattern
+    ? { name: 'grep', params: { pattern, limit: 20 } }
+    : { name: 'page_content', params: { format: 'markdown' } };
+}
+
+function rewriteOffTabTool(toolName, args, pin, input) {
+  if (!pin.attached || userAskedToLeaveAttachedTab(input)) return null;
+  const n = canonicalToolName(toolName);
+  if (n === 'web_search' || n === 'web_extract') {
+    return stayOnPageAction(args.query || args.q || args.url || args.text || args.pattern);
+  }
+  return null;
+}
+
+function stayOnAttachedTab(action, pin, input) {
+  if (!pin.attached || !action || userAskedToLeaveAttachedTab(input)) return action;
+  if (action.name === 'navigate') {
+    const url = String(action.params?.url || '');
+    if (isSearchEngineUrl(url)) return stayOnPageAction(queryFromSearchUrl(url));
+    if (pin.url && samePageUrl(url, pin.url)) return { name: 'snapshot', params: {} };
+    if (pin.url) {
+      try {
+        if (new URL(url, pin.url).origin !== new URL(pin.url).origin) {
+          return { name: 'snapshot', params: {} };
+        }
+      } catch {}
+    }
+  }
+  if (action.name === 'tabs') {
+    const verb = String(action.params?.action || 'list').toLowerCase();
+    if (/^(create|new|open|new_page)$/.test(verb)) return { name: 'snapshot', params: {} };
+    if (/^(close|switch)$/.test(verb) && pin.tabId != null) {
+      const target = action.params?.tabId ?? action.params?.id;
+      if (target != null && Number(target) !== Number(pin.tabId)) return { name: 'snapshot', params: {} };
+    }
+  }
+  if (action.name === 'windows') {
+    const verb = String(action.params?.action || 'list').toLowerCase();
+    if (/^(create|new)$/.test(verb)) return { name: 'snapshot', params: {} };
+  }
+  return action;
+}
+
+function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools, input = {}) {
+  if (mirroredTools.has(toolCallId)) return;
   let args;
   try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
   catch { return; } // streamed JSON is not complete yet
-  const action = normalizeBrowserTool(tool.name, args);
+  const pin = attachPin(input);
+  const rewritten = rewriteOffTabTool(tool.name, args, pin, input);
+  let action = rewritten;
+  if (!action) {
+    if (!isBrowserCompanionTool(tool.name)) return;
+    action = stayOnAttachedTab(normalizeBrowserTool(tool.name, args), pin, input);
+  }
   if (!action || !actionReadyToMirror(action)) return;
   mirroredTools.add(toolCallId);
   const requestId = uid('browser_');
-  const sent = wsSend({ kind: 'browser-action', requestId, toolCallId, action });
+  const payload = { kind: 'browser-action', requestId, toolCallId, action };
+  if (pin.tabId != null) payload.tabId = pin.tabId;
+  const sent = wsSend(payload);
   if (sent) {
     mirrorStreams.set(requestId, { res, threadId, toolCallId, toolName: tool.name });
     setTimeout(() => mirrorStreams.delete(requestId), 120_000);
   }
+  const stayed = Boolean(rewritten) || (action && isBrowserCompanionTool(tool.name) && action.name !== normalizeBrowserTool(tool.name, args)?.name);
   res.write(sse(custom('agent-status', {
     phase: sent ? 'browser' : 'browser-unavailable',
-    label: sent ? `Mirroring ${tool.name} in active tab…` : 'Browser companion is not connected',
-    requestId, toolCallId, toolName: tool.name
+    label: sent
+      ? (stayed ? `Staying on attached tab instead of ${tool.name}…` : `Mirroring ${tool.name} in attached tab…`)
+      : 'Browser companion is not connected',
+    requestId, toolCallId, toolName: tool.name, tabId: pin.tabId, rewritten: stayed
   })));
 }
 
@@ -745,7 +863,7 @@ async function runAgent(threadId, runId, input, res) {
         if (typeof args === 'string') existing.args += args;
         else existing.args = args;
         toolAccum.set(tcid, existing);
-        mirrorBrowserAction(threadId, tcid, existing, res, mirroredTools);
+        mirrorBrowserAction(threadId, tcid, existing, res, mirroredTools, input);
 
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
@@ -811,13 +929,16 @@ function buildHermesPrompt(input, threadId = input.threadId) {
 
   if (attached) {
     const url = pageContext?.url || input.attachedTab?.url || '';
+    const tabId = pageContext?.tabId || input.attachedTab?.id;
     parts.push(
       `[ATTACHED LIVE TAB]\n` +
-      `The user attached their real Chrome tab${url ? ` (${url})` : ''}. This is not a Hermes-internal, headless, or secondary browser.\n` +
+      `The user attached their real Chrome tab${tabId != null ? ` #${tabId}` : ''}${url ? ` (${url})` : ''}. This is not a Hermes-internal, headless, or secondary browser.\n` +
+      `Stay in this tab. Do not open Hermes' internal browser, a headless browser, or another window.\n` +
       `Answer from [PAGE CONTEXT] first.\n` +
       `Do not call web_search or web_extract to re-fetch this page.\n` +
       `Do not browser_navigate to this same URL or to a search engine unless the user explicitly asks to leave this tab.\n` +
-      `If you need more of the page, call browser_snapshot, browser_read, browser_scroll, or browser_grep. The companion will run those in the attached tab.\n` +
+      `Do not call browser_new_page or create/switch tabs or windows.\n` +
+      `If you need more of the page, call browser_snapshot, browser_page_content, browser_read, browser_scroll, or browser_grep. The companion will run those in the attached tab.\n` +
       `Only use web_search if the user asks for information that is clearly not on this page.`
     );
   }
@@ -911,7 +1032,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
     (attached
-      ? 'The live Chrome tab is already attached. Use @e1 refs from the page snapshot and companion-mirrored browser tools on that tab. Do not open another browser. '
+      ? 'The live Chrome tab is already attached. Use @e1 refs from the page snapshot and companion-mirrored browser tools on that tab. Do not open another browser. Search/navigate-away calls are rewritten onto this tab. '
       : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
     'Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );

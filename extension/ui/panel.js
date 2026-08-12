@@ -585,7 +585,7 @@ function connectPort() {
       updatePageBar();
     } else if (m.kind === 'page-context-status') {
       if (m.ok) {
-        runLabel(`Using this tab · ${m.interactive || 0} controls`);
+        runLabel(`Pinned to this tab · ${m.interactive || 0} controls`);
         if (m.title || m.url) {
           $('pageTitle').textContent = m.title || m.url;
           $('pageTitle').title = m.url || '';

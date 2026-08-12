@@ -65,6 +65,42 @@ try {
 ok(sawAbort, 'abort cancels the in-flight AG-UI fetch');
 ok(live.busy === false, 'client is idle after abort');
 
+const race = new AGUIClient({ url: `http://127.0.0.1:${port}/agent` });
+const genA = race.prepareRun();
+ok(race.abortRun(genA) === true, 'abortRun(A) cancels generation A');
+const genB = race.prepareRun();
+ok(genB !== genA && race.activeGeneration === genB, 'prepareRun B installs a new generation');
+ok(race.abort && race.abort.signal.aborted === false, 'B controller is live after aborting A');
+ok(race.abortRun(genA) === false, 'abortRun(A) is a no-op after B starts');
+ok(race.abort && race.abort.signal.aborted === false, 'stale abort A does not kill B');
+
+let staleThrew = false;
+try {
+  await race.runAgent({ messages: [{ role: 'user', content: 'stale A' }] }, { generation: genA });
+} catch (error) {
+  staleThrew = error?.name === 'AbortError' || /abort/i.test(String(error?.message || error));
+}
+ok(staleThrew, 'leftover run A cannot fetch after B starts');
+ok(race.activeGeneration === genB && race.abort && race.abort.signal.aborted === false, 'stale run A does not clear or abort B');
+
+const runB = race.runAgent({ messages: [{ role: 'user', content: 'B hang' }] }, { generation: genB });
+await new Promise((resolve) => setTimeout(resolve, 80));
+ok(race.busy === true, 'run B is in flight');
+ok(race.abortRun(genA) === false, 'aborting A while B is live is a no-op');
+ok(race.busy === true && race.abort?.signal?.aborted === false, 'in-flight B survives abort A');
+ok(race.abortRun(genB) === true, 'abortRun(B) cancels the live generation');
+let sawBAbort = false;
+try {
+  await Promise.race([
+    runB,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('B abort did not cancel')), 1500))
+  ]);
+} catch (error) {
+  sawBAbort = error?.name === 'AbortError' || /abort/i.test(String(error?.message || error));
+}
+ok(sawBAbort, 'aborting generation B cancels the in-flight fetch');
+ok(race.busy === false, 'client is idle after aborting B');
+
 server.close();
 console.log(`\n[${passed} passed, ${failed} failed]`);
 process.exit(failed ? 1 : 0);

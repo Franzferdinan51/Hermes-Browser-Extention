@@ -135,10 +135,11 @@ Click the Hermes extension icon. The panel will:
 
 - discover configured Hermes models,
 - load the real Hermes toolset/skill inventory,
-- attach a fresh page snapshot when **attach page** is enabled,
+- attach a fresh page snapshot when **attach this tab** is enabled,
+- keep later browser actions on that pinned tab (search/new-page calls stay there),
 - stream Hermes text/tool activity,
 - show connection/runtime state,
-- mirror compatible browser actions into the active tab when page acting is enabled.
+- mirror compatible browser actions into the attached tab when page acting is enabled.
 
 ## Hermes runtime inspector
 

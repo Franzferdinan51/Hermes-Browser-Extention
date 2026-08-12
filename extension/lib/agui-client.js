@@ -84,18 +84,22 @@ export class AGUIClient extends Emitter {
     this.abort = null;
     this.busy = false;
     this.cancelRequested = false;
+    this.activeGeneration = 0;
+    this.runGeneration = 0;
   }
 
-  /** Install the AbortController before slow pre-flight work (page snapshot). */
+  /** Install a new run generation + AbortController before slow pre-flight work. */
   prepareRun() {
-    const already = this.cancelRequested;
+    this.runGeneration += 1;
+    this.activeGeneration = this.runGeneration;
+    this.cancelRequested = false;
     this.abort = new AbortController();
     this.busy = true;
-    if (already) this.abort.abort();
-    return this.abort;
+    return this.activeGeneration;
   }
 
-  wasCanceled() {
+  wasCanceled(generation) {
+    if (generation != null && generation !== this.activeGeneration) return true;
     return Boolean(this.cancelRequested || this.abort?.signal?.aborted);
   }
 
@@ -104,22 +108,21 @@ export class AGUIClient extends Emitter {
    * absent. Resolves with the aggregated result; streams events to onEvent /
    * emitted events in the meantime.
    */
-  async runAgent(input = {}) {
+  async runAgent(input = {}, opts = {}) {
     const runId = input.runId || uid('run_');
     const threadId = input.threadId || uid('thread_');
     const body = { ...input, runId, threadId };
+    const generation = opts.generation ?? this.activeGeneration;
 
-    // Reuse a controller installed by prepareRun() so Stop works during
-    // snapshot/preflight, before fetch starts.
-    const ctrl = this.abort || new AbortController();
-    this.abort = ctrl;
+    // Bind to this generation's controller. A newer prepareRun() must not let
+    // an older chat() steal or abort the new turn.
+    if (!generation || generation !== this.activeGeneration || !this.abort) {
+      throw abortError();
+    }
+    const ctrl = this.abort;
     this.busy = true;
     if (this.cancelRequested || ctrl.signal.aborted) {
-      const error = abortError();
-      this.busy = false;
-      this.abort = null;
-      this.cancelRequested = false;
-      throw error;
+      throw abortError();
     }
 
     const messageBuf = new Map();   // messageId -> {role, text}
@@ -182,18 +185,22 @@ export class AGUIClient extends Emitter {
       if (!res.body) throw new Error('AG-UI endpoint returned no body stream');
 
       await this._readSSE(res.body, dispatch);
+      if (generation !== this.activeGeneration || ctrl.signal.aborted) throw abortError();
 
       const result = { messages: [...messageBuf.values()], tools: [...toolBuf.values()], state };
       this.emit('complete', result);
       return result;
     } finally {
-      this.busy = false;
-      this.abort = null;
-      this.cancelRequested = false;
+      if (this.activeGeneration === generation) {
+        this.busy = false;
+        this.abort = null;
+        this.cancelRequested = false;
+      }
     }
   }
 
-  abortRun() {
+  abortRun(generation) {
+    if (generation != null && generation !== this.activeGeneration) return false;
     this.cancelRequested = true;
     if (this.abort) this.abort.abort();
     return true;

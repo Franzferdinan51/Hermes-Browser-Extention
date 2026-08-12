@@ -63,6 +63,14 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('ATTACH_STAY_PROBE')) {
+      emit('tool_call', { tool_call_id: 'ts1', name: 'web_search', args: { query: 'example domain' } });
+      emit('tool_call', { tool_call_id: 'ts2', name: 'browser_navigate', args: { url: 'https://www.google.com/search?q=example' } });
+      emit('tool_call', { tool_call_id: 'ts3', name: 'browser_new_page', args: { url: 'https://www.bing.com/' } });
+      emit('done', {});
+      res.end();
+      return;
+    }
     emit('context_status', { used_tokens: 1000, max_tokens: 8000 });
     emit('metering', { input_tokens: 50, output_tokens: 10, total_tokens: 60 });
     emit('token', { text: 'Hello ' });
@@ -227,10 +235,13 @@ async function main() {
         agentId: 'hermes',
         threadId: 'thread_t1',
         runId: 'run_t1',
+        attachPage: true,
+        attachedTab: { id: 99, url: 'https://example.com', title: 'Example' },
         context: [{
           type: 'page_context',
           url: 'https://example.com',
           title: 'Example',
+          tabId: 99,
           document: '<h1>Hi</h1>',
           accessibility: '[e1] button "Go"',
           interactive: [{ ref: 'e1', tag: 'button', text: 'Go' }]
@@ -254,6 +265,8 @@ async function main() {
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
   ok(body.includes('"phase":"browser"'), 'mirrorable browser tool is dispatched to companion');
   ok(companionActions.some((msg) => msg.action?.name === 'page_content' && msg.action?.params?.format === 'markdown'), 'BrowserOS catalog alias get_page_content is mirrored independently');
+  ok(companionActions.some((msg) => msg.tabId === 99), 'attached tab id is pinned on companion actions');
+  ok(companionActions.some((msg) => msg.action?.name === 'grep' && String(msg.action?.params?.pattern || '').includes('example')), 'attached web_search is rewritten onto the live tab');
   ok(body.includes('"kind":"tool-result"') && body.includes('Fake active tab'), 'companion result is returned in AG-UI stream');
   ok(body.indexOf('"TOOL_CALL_START"') >= 0 && body.indexOf('"TOOL_CALL_START"') < body.indexOf('"kind":"tool-result"'), 'tool cards start before companion results arrive');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
@@ -311,6 +324,31 @@ async function main() {
     body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'MOVE_PAGE_PROBE' }] })
   })).text();
   ok(companionActions.slice(beforeMove).some((msg) => msg.action?.name === 'tabs' && msg.action?.params?.action === 'move' && msg.action?.params?.tabId === 7), 'catalog alias move_page is mirrored as tabs move');
+
+  const beforeStay = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      attachPage: true,
+      attachedTab: { id: 42, url: 'https://example.com/attached', title: 'Attached' },
+      context: [{
+        type: 'page_context',
+        url: 'https://example.com/attached',
+        title: 'Attached',
+        tabId: 42,
+        document: '<h1>Stay here</h1>'
+      }],
+      messages: [{ role: 'user', content: 'ATTACH_STAY_PROBE summarize this page' }]
+    })
+  })).text();
+  const stayActions = companionActions.slice(beforeStay);
+  ok(stayActions.length >= 1 && stayActions.every((msg) => msg.tabId === 42), 'stay-on-tab actions are pinned to the attached tab');
+  ok(stayActions.some((msg) => msg.action?.name === 'grep' && String(msg.action?.params?.pattern || '').includes('example')), 'web_search is rewritten to search the attached page');
+  ok(!stayActions.some((msg) => msg.action?.name === 'navigate' && /google|bing/i.test(String(msg.action?.params?.url || ''))), 'search-engine navigate is not sent to another browser');
+  ok(!stayActions.some((msg) => msg.action?.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(msg.action?.params?.action || ''))), 'new-page is not opened while a tab is attached');
+  ok(stayActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'leave-tab tools stay on the attached page');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();
