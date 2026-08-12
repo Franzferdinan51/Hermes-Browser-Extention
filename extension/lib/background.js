@@ -375,6 +375,7 @@ async function runActionOnTab(action, tabId) {
 async function chat(userText, opts = {}) {
   const cfg = await store.get();
   if (!client) client = await buildClient();
+  if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) connectBridgeWs();
 
   const extra = {};
   const requestedModel = opts.model || cfg.model;
@@ -540,6 +541,9 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => portClients.delete(port));
   port.onMessage.addListener((msg) => {
     if (msg.kind === 'hello') {
+      // Opening the side panel is the reliable MV3 wake signal. Re-attempt the
+      // bridge connection immediately instead of waiting for the old timer.
+      connectBridgeWs();
       port.postMessage({
         kind: 'state',
         threadId: currentThreadId,
