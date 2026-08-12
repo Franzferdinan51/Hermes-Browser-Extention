@@ -232,7 +232,7 @@ async function main() {
   ok(body.includes('"phase":"reasoning"'), 'surfaces reasoning lifecycle without raw reasoning');
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
   ok(body.includes('"phase":"browser"'), 'mirrorable browser tool is dispatched to companion');
-  ok(companionActions.some((item) => item.action?.name === 'click' && item.requestId), 'companion receives correlated browser click');
+  ok(body.includes('"kind":"tool-result"') && body.includes('Fake active tab'), 'companion result is returned in AG-UI stream');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 

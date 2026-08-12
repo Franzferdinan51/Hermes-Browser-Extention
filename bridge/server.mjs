@@ -107,6 +107,7 @@ function json(res, status, value) {
 // ---------------------------------------------------------------------------
 const wsClients = new Set();
 const pendingToolResults = new Map();
+const mirrorStreams = new Map();
 
 function wsSend(obj) {
   let sent = 0;
@@ -136,10 +137,24 @@ function resolveToolResult(payload = {}) {
   if (!requestId && pendingToolResults.size === 1) requestId = pendingToolResults.keys().next().value;
   if (!requestId) return false;
   const pending = pendingToolResults.get(requestId);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingToolResults.delete(requestId);
-  pending.resolve(payload.result || payload);
+  const mirror = mirrorStreams.get(requestId);
+  if (!pending && !mirror) return false;
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingToolResults.delete(requestId);
+    pending.resolve(payload.result || payload);
+  }
+  if (mirror) {
+    mirrorStreams.delete(requestId);
+    if (!mirror.res.writableEnded) {
+      mirror.res.write(sse(custom('tool-result', {
+        requestId,
+        toolCallId: mirror.toolCallId,
+        ok: payload.result?.ok !== false,
+        result: payload.result || payload
+      })));
+    }
+  }
   return true;
 }
 
@@ -153,6 +168,10 @@ function mirrorBrowserAction(toolCallId, tool, res, mirroredTools) {
   mirroredTools.add(toolCallId);
   const requestId = uid('browser_');
   const sent = wsSend({ kind: 'browser-action', requestId, toolCallId, action });
+  if (sent) {
+    mirrorStreams.set(requestId, { res, toolCallId });
+    setTimeout(() => mirrorStreams.delete(requestId), 120_000);
+  }
   res.write(sse(custom('agent-status', {
     phase: sent ? 'browser' : 'browser-unavailable',
     label: sent ? `Mirroring ${tool.name} in active tab…` : 'Browser companion is not connected',
@@ -316,9 +335,12 @@ async function runAgent(threadId, runId, input, res) {
       res.write(sse(toolEnd(tcid)));
     }
 
-    // Compatible browser actions are mirrored as soon as their arguments are
-    // complete inside the stream. Never wait here: Hermes may still be waiting
-    // on its own native tool result, and waiting would deadlock the SSE run.
+    // Give fast active-tab actions a short bounded window to arrive on the
+    // same AG-UI stream. This is deliberately finite and cannot deadlock on
+    // Hermes tool execution.
+    if ([...mirrorStreams.values()].some((entry) => entry.res === res)) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
     res.write(sse(custom('agent-status', { phase: 'done', label: 'Done' })));
     res.write(sse(runFinished(threadId, runId)));
   } catch (e) {
