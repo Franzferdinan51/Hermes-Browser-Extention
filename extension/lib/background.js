@@ -705,7 +705,7 @@ async function chat(userText, opts = {}) {
         title: snapshot.title,
         tabId: snapshot.tabId,
         document: doc.slice(0, maxDomChars),
-        accessibility: snapshot.snapshot.accessibility || '',
+        accessibility: String(snapshot.snapshot.accessibility || '').slice(0, 6000),
         signals: (snapshot.snapshot.signals || []).slice(0, 30),
         feed: snapshot.snapshot.feed || [],
         interactive,
