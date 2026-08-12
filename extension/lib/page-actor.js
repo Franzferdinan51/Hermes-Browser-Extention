@@ -106,11 +106,34 @@ function targetLabel(params = {}) {
   return params.selector || params.element || params.ref || params.target || 'target';
 }
 
+function isEditableTarget(target) {
+  return Boolean(target?.isContentEditable || target?.getAttribute?.('contenteditable') === 'true' || target?.getAttribute?.('role') === 'textbox' && target?.tagName === 'DIV');
+}
+
 function dispatchInput(target, value) {
   const text = String(value ?? '');
-  if (target.isContentEditable) {
-    target.textContent = text;
-    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  if (isEditableTarget(target)) {
+    target.focus({ preventScroll: true });
+    // React/ProseMirror/Twitter-style editors do not reliably observe a raw
+    // textContent assignment. Use the browser editing command first, then
+    // normalize the DOM and emit beforeinput/input/change for controlled state.
+    try {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('insertText', false, text);
+    } catch {}
+    if (cleanText(target.innerText || target.textContent || '') !== cleanText(text)) {
+      target.textContent = text;
+    }
+    try {
+      target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+      target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    } catch {
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    }
     target.dispatchEvent(new Event('change', { bubbles: true }));
     return;
   }
@@ -164,7 +187,12 @@ async function actionSetValue(p = {}) {
   const target = el(selector);
   if (!target) return { ok: false, error: `Element not found: ${selector}` };
   try { target.focus({ preventScroll: true }); } catch {}
-  dispatchInput(target, p.value ?? p.text ?? '');
+  const wanted = String(p.value ?? p.text ?? '');
+  dispatchInput(target, wanted);
+  const entered = isEditableTarget(target) ? cleanText(target.innerText || target.textContent || '') : String(target.value ?? '');
+  if (cleanText(entered) !== cleanText(wanted)) {
+    return { ok: false, error: `Editor did not accept text for ${selector}` };
+  }
   return { ok: true, value: `set ${selector}` };
 }
 

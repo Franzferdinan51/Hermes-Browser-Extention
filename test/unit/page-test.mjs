@@ -29,6 +29,7 @@ const html = `<!doctype html>
   <button class="cta" data-testid="buy">Buy Now</button>
   <select name="sel"><option value="a">A</option><option value="b">B</option></select>
   <textarea name="notes"></textarea>
+  <div id="editor" contenteditable="true" role="textbox"></div>
   <label><input id="agree" type="checkbox" /> Agree</label>
   <div id="drag-source">Drag source</div><div id="drag-target">Drop target</div>
   <img id="hero" src="https://example.com/hero.png" alt="Hero image" width="640" height="320" />
@@ -175,6 +176,8 @@ async function drive() {
 
   const fillRes = await actor.runAction({ name: 'fill', params: { selector: '#q', value: 'hello world' } });
   ok(fillRes.ok && document.getElementById('q').value === 'hello world', 'actor fills input by id selector');
+  const editorRes = await actor.runAction({ name: 'type', params: { selector: '#editor', text: 'Smart reply text' } });
+  ok(editorRes.ok && document.getElementById('editor').textContent.includes('Smart reply text'), 'actor types into contenteditable editor');
 
   const selRes = await actor.runAction({ name: 'select_option', params: { selector: 'select[name="sel"]', value: 'b' } });
   ok(selRes.ok && document.querySelector('select[name="sel"]').value === 'b', 'actor selects dropdown option');
