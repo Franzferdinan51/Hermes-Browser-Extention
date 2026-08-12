@@ -2,7 +2,7 @@
 
 A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-**Current release: 0.3.2**
+**Current release: 0.3.3**
 
 Sources and design references:
 
@@ -10,6 +10,12 @@ Sources and design references:
 - **AG-UI** — MIT — agent ↔ UI event protocol
 - **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
 - **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
+
+## What 0.3.3 adds
+
+- New Hermes mark and empty-state art generated with Imagine (winged helmet, gold + teal).
+- Four appearance themes in Settings: Midnight, Aurora, Ember, Marble, plus density and accent-glow controls.
+- Theme applies across the side panel, popup, and options page.
 
 ## What 0.3.2 adds
 

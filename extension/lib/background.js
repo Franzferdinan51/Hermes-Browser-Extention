@@ -17,7 +17,10 @@ const DEFAULTS = {
   autoSnapshot: false,
   attachPageContext: true,
   maxDomChars: 30000,
-  enablePageActing: true
+  enablePageActing: true,
+  theme: 'midnight',
+  density: 'comfortable',
+  accentGlow: true
 };
 
 const store = {

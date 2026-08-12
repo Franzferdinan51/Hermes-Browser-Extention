@@ -747,6 +747,7 @@ $('refreshModels').addEventListener('click', () => loadModels(selectedModelId ||
     selectedModelId = config.model || '';
     selectedProvider = config.modelProvider || '';
     $('autoSnap').checked = config.attachPageContext !== false;
+    if (globalThis.HermesTheme) HermesTheme.apply(config);
     await Promise.all([
       loadModels(selectedModelId, selectedProvider),
       loadRuntime(false)

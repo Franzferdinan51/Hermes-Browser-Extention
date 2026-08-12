@@ -7,10 +7,10 @@
   <link rel="stylesheet" href="common.css" />
   <style>
     body { margin: 0; padding: 36px 22px 56px; display: flex; justify-content: center; min-height: 100vh; }
-    .wrap { width: min(860px, 100%); }
-    .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
-    .hero img { width: 54px; height: 54px; filter: drop-shadow(0 10px 24px rgba(0,0,0,.34)); }
-    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.025em; }
+    .wrap { width: min(900px, 100%); }
+    .hero { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+    .hero img { width: 72px; height: 72px; border-radius: 18px; box-shadow: var(--glow); }
+    h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -.03em; }
     .sub { color: var(--muted); font-size: 13px; margin: 0; }
     .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 16px; }
     .card { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 22px; box-shadow: var(--shadow-lg); backdrop-filter: blur(18px); }
@@ -46,10 +46,10 @@
 <body>
   <div class="wrap">
     <div class="hero">
-      <img src="../icons/icon128.png" alt="Hermes Browser" />
+      <img src="../icons/icon-hero.png" alt="Hermes Browser" />
       <div>
         <h1>Hermes Browser Companion</h1>
-        <p class="sub">Local-first browser control over AG-UI, with model discovery and page-action controls.</p>
+        <p class="sub">Local-first browser control over AG-UI, with a look you can actually live in.</p>
       </div>
     </div>
 
@@ -118,6 +118,30 @@
 
       <div>
         <div class="card">
+          <div class="section-title"><h2>Appearance</h2></div>
+          <div class="field">
+            <label>Theme</label>
+            <div class="theme-grid" id="themeGrid" role="group" aria-label="Theme">
+              <button type="button" class="theme-card" data-theme="midnight" aria-pressed="true"><i class="theme-swatch swatch-midnight"></i><b>Midnight</b><span>Indigo glass, teal spark</span></button>
+              <button type="button" class="theme-card" data-theme="aurora" aria-pressed="false"><i class="theme-swatch swatch-aurora"></i><b>Aurora</b><span>Cool teal and violet</span></button>
+              <button type="button" class="theme-card" data-theme="ember" aria-pressed="false"><i class="theme-swatch swatch-ember"></i><b>Ember</b><span>Warm gold and copper</span></button>
+              <button type="button" class="theme-card" data-theme="marble" aria-pressed="false"><i class="theme-swatch swatch-marble"></i><b>Marble</b><span>Light paper, ink type</span></button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Density</label>
+            <div class="seg" id="densitySeg" role="group" aria-label="Density">
+              <button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button>
+              <button type="button" data-density="compact" aria-pressed="false">Compact</button>
+            </div>
+          </div>
+          <div class="switch-card">
+            <input type="checkbox" id="accentGlow" checked />
+            <div class="copy"><strong>Accent glow</strong><span>Soft colored light on the mark, primary buttons, and status dots.</span></div>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="section-title"><h2>Browser context</h2></div>
 
           <div class="switch-card">
@@ -147,6 +171,7 @@
       </div>
     </div>
   </div>
+  <script src="theme.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -41,6 +41,10 @@ async function load() {
   $('workspace').value = c.workspace || '';
   $('attachPageContext').checked = c.attachPageContext !== false;
   $('enablePageActing').checked = c.enablePageActing !== false;
+  $('accentGlow').checked = c.accentGlow !== false;
+  setTheme(c.theme || 'midnight', false);
+  setDensity(c.density || 'comfortable', false);
+  if (globalThis.HermesTheme) HermesTheme.apply(c);
   syncDomRange(c.maxDomChars || 30000);
   selectedModelId = c.model || '';
   selectedProvider = c.modelProvider || '';
@@ -176,8 +180,29 @@ function collect() {
     attachPageContext: $('attachPageContext').checked,
     autoSnapshot: false,
     maxDomChars: Number($('maxDomCharsNumber').value) || 30000,
-    enablePageActing: $('enablePageActing').checked
+    enablePageActing: $('enablePageActing').checked,
+    theme: document.querySelector('.theme-card[aria-pressed="true"]')?.dataset.theme || 'midnight',
+    density: document.querySelector('#densitySeg button[aria-pressed="true"]')?.dataset.density || 'comfortable',
+    accentGlow: $('accentGlow').checked
   };
+}
+
+function setTheme(theme, persist = true) {
+  for (const button of document.querySelectorAll('.theme-card')) {
+    button.setAttribute('aria-pressed', String(button.dataset.theme === theme));
+  }
+  const cfg = { ...collect(), theme };
+  if (globalThis.HermesTheme) HermesTheme.apply(cfg);
+  if (persist) chrome.runtime.sendMessage({ kind: 'set-config', patch: { theme } }).catch(() => null);
+}
+
+function setDensity(density, persist = true) {
+  for (const button of document.querySelectorAll('#densitySeg button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.density === density));
+  }
+  const cfg = { ...collect(), density };
+  if (globalThis.HermesTheme) HermesTheme.apply(cfg);
+  if (persist) chrome.runtime.sendMessage({ kind: 'set-config', patch: { density } }).catch(() => null);
 }
 
 function setHealth(ok, text) {
@@ -236,12 +261,24 @@ $('toggleToken').addEventListener('click', () => {
   input.type = showing ? 'password' : 'text';
   $('toggleToken').textContent = showing ? 'Show' : 'Hide';
 });
+document.querySelectorAll('.theme-card').forEach((button) => {
+  button.addEventListener('click', () => setTheme(button.dataset.theme));
+});
+document.querySelectorAll('#densitySeg button').forEach((button) => {
+  button.addEventListener('click', () => setDensity(button.dataset.density));
+});
+$('accentGlow').addEventListener('change', () => {
+  const cfg = collect();
+  if (globalThis.HermesTheme) HermesTheme.apply(cfg);
+  chrome.runtime.sendMessage({ kind: 'set-config', patch: { accentGlow: cfg.accentGlow } }).catch(() => null);
+});
 $('maxDomChars').addEventListener('input', (e) => syncDomRange(e.target.value));
 $('maxDomCharsNumber').addEventListener('change', (e) => syncDomRange(e.target.value));
 $('reset').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ kind: 'set-config', patch: {
     bridgeUrl: 'http://127.0.0.1:8965', authToken: '', model: 'qwen3.5-9b', modelProvider: 'lmstudio',
-    workspace: '', attachPageContext: true, autoSnapshot: false, maxDomChars: 30000, enablePageActing: true
+    workspace: '', attachPageContext: true, autoSnapshot: false, maxDomChars: 30000, enablePageActing: true,
+    theme: 'midnight', density: 'comfortable', accentGlow: true
   }});
   $('modelSearch').value = '';
   $('providerFilter').value = '';

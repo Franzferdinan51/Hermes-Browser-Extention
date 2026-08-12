@@ -6,8 +6,8 @@
   <link rel="stylesheet" href="common.css" />
   <style>
     body { margin: 0; width: 350px; max-height: 430px; display: flex; flex-direction: column; background: var(--bg); }
-    .head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: linear-gradient(135deg, rgba(35,30,72,.9), rgba(18,28,43,.9)); }
-    .head .logo { width: 25px; height: 25px; border-radius: 8px; box-shadow: 0 5px 14px rgba(0,0,0,.24); }
+    .head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(16px); }
+    .head .logo { width: 28px; height: 28px; border-radius: 8px; box-shadow: var(--glow); }
     .head .title { font-weight: 750; font-size: 14px; flex: 1; letter-spacing: -.01em; }
     .head button { padding: 4px 8px; font-size: 11px; }
     #status { font-size: 11px; padding: 5px 12px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; align-items: center; }
@@ -23,7 +23,7 @@
     .msg.assistant { align-self: flex-start; }
     .msg.tool { align-self: flex-start; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
     .msg.err { background: rgba(255,92,114,.12); border-color: rgba(255,92,114,.4); color: var(--red); }
-    .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: rgba(20,22,39,.7); }
+    .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 88%, transparent); }
     #prompt { flex: 1; }
     #send { padding: 8px 14px; }
     .grow { flex: 1; }
@@ -31,7 +31,7 @@
 </head>
 <body>
   <div class="head">
-    <img class="logo" src="../icons/icon32.png" alt="" />
+    <img class="logo" src="../icons/icon48.png" alt="" />
     <span class="title">Hermes</span>
     <button id="openPanel">Side panel →</button>
     <button id="clear">Clear</button>
@@ -43,6 +43,7 @@
     <input type="text" id="prompt" placeholder="Ask Hermes about this page…" />
     <button id="send" class="primary">Send</button>
   </div>
+  <script src="theme.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

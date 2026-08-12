@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" data-theme="midnight" data-density="comfortable" data-glow="on">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes UI preview</title>
+  <link rel="stylesheet" href="../extension/ui/common.css" />
+  <link rel="stylesheet" href="../extension/ui/panel.css" />
+  <style>
+    body { margin: 0; padding: 24px; }
+    .preview-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+    .stage { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .phone { height: 720px; border: 1px solid var(--border); border-radius: 18px; overflow: hidden; background: var(--bg); box-shadow: var(--shadow-lg); }
+    .settings-stage { border: 1px solid var(--border); border-radius: 18px; overflow: auto; background: transparent; min-height: 720px; padding: 22px; }
+    .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+    .hero img { width: 64px; height: 64px; border-radius: 16px; box-shadow: var(--glow); }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 16px; margin-bottom: 12px; }
+    @media (max-width: 860px) { .stage { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="preview-bar">
+    <strong>Hermes UI preview</strong>
+    <button type="button" data-theme="midnight">Midnight</button>
+    <button type="button" data-theme="aurora">Aurora</button>
+    <button type="button" data-theme="ember">Ember</button>
+    <button type="button" data-theme="marble">Marble</button>
+    <button type="button" data-density="comfortable">Comfortable</button>
+    <button type="button" data-density="compact">Compact</button>
+  </div>
+
+  <div class="stage">
+    <section class="phone" id="panelPreview">
+      <header class="ph">
+        <div class="ph-logo"><img src="../extension/icons/icon48.png" alt="" /></div>
+        <div class="ph-title"><strong>Hermes</strong><span>browser companion</span></div>
+        <div class="ph-status ok"></div>
+      </header>
+      <section class="pagebar">
+        <div class="page-title">Example page · example.com</div>
+        <button class="mini">snapshot</button>
+      </section>
+      <main class="chat">
+        <div class="empty">
+          <img class="empty-art" src="../extension/icons/empty-state.png" alt="" />
+          <strong>Ask about this page</strong>
+          <p>Hermes can read the current tab and, when enabled, mirror compatible browser actions into it.</p>
+        </div>
+        <div class="msg user" style="display:none"></div>
+      </main>
+      <footer class="composer">
+        <div class="toolbar">
+          <button>New</button>
+          <label class="model-picker"><span>MODEL</span><select><option>qwen3.5-9b</option></select></label>
+        </div>
+        <div class="composer-row">
+          <textarea rows="1" placeholder="Message Hermes…"></textarea>
+          <button class="primary">Send</button>
+        </div>
+      </footer>
+    </section>
+
+    <section class="settings-stage">
+      <div class="hero">
+        <img src="../extension/icons/icon-hero.png" alt="" />
+        <div>
+          <h1>Hermes Browser Companion</h1>
+          <p class="muted">Local-first browser control over AG-UI, with a look you can actually live in.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2 style="margin:0 0 12px;font-size:14px">Appearance</h2>
+        <div class="theme-grid">
+          <button type="button" class="theme-card" data-theme="midnight" aria-pressed="true"><i class="theme-swatch swatch-midnight"></i><b>Midnight</b><span>Indigo glass, teal spark</span></button>
+          <button type="button" class="theme-card" data-theme="aurora"><i class="theme-swatch swatch-aurora"></i><b>Aurora</b><span>Cool teal and violet</span></button>
+          <button type="button" class="theme-card" data-theme="ember"><i class="theme-swatch swatch-ember"></i><b>Ember</b><span>Warm gold and copper</span></button>
+          <button type="button" class="theme-card" data-theme="marble"><i class="theme-swatch swatch-marble"></i><b>Marble</b><span>Light paper, ink type</span></button>
+        </div>
+      </div>
+      <div class="card">
+        <h2 style="margin:0 0 10px;font-size:14px">Connection</h2>
+        <div class="field"><label>Local bridge URL</label><input value="http://127.0.0.1:8965" /></div>
+        <button class="primary">Test connection</button>
+        <span class="pill ok" style="margin-left:8px">connected</span>
+      </div>
+    </section>
+  </div>
+  <script>
+    function paint(theme, density) {
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.density = density;
+      document.body.dataset.theme = theme;
+      document.body.dataset.density = density;
+      document.querySelectorAll('.theme-card').forEach((btn) => {
+        btn.setAttribute('aria-pressed', String(btn.dataset.theme === theme));
+      });
+    }
+    let theme = 'midnight', density = 'comfortable';
+    document.querySelectorAll('[data-theme]').forEach((btn) => btn.addEventListener('click', () => { theme = btn.dataset.theme; paint(theme, density); }));
+    document.querySelectorAll('[data-density]').forEach((btn) => btn.addEventListener('click', () => { density = btn.dataset.density; paint(theme, density); }));
+  </script>
+</body>
+</html>

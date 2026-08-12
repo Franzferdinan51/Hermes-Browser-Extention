@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="ph">
-    <div class="ph-logo"><img src="../icons/icon32.png" alt="" /></div>
+    <div class="ph-logo"><img src="../icons/icon48.png" alt="" /></div>
     <div class="ph-title"><strong>Hermes</strong><span>browser companion</span></div>
     <button id="btnSettings" class="icon-btn" title="Open Hermes settings" aria-label="Open Hermes settings">⚙</button>
     <div class="ph-status" id="phStatus" title="connection">●</div>
@@ -43,7 +43,11 @@
   </section>
 
   <main class="chat" id="chat">
-    <div class="empty" id="empty">Ask Hermes about the page you're viewing. It can read the DOM and, when enabled, mirror compatible Hermes browser actions into the active tab.</div>
+    <div class="empty" id="empty">
+      <img class="empty-art" src="../icons/empty-state.png" alt="" />
+      <strong>Ask about this page</strong>
+      <p>Hermes can read the current tab and, when enabled, mirror compatible browser actions into it.</p>
+    </div>
   </main>
 
   <footer class="composer">
@@ -68,6 +72,7 @@
     </div>
   </footer>
 
+  <script src="theme.js"></script>
   <script type="module" src="panel.js"></script>
 </body>
 </html>
