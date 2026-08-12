@@ -1,6 +1,7 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
 import { readThreadId, buildChatRequest } from '../lib/thread.js';
+import { abortSucceeded } from '../lib/agui-client.js';
 
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
@@ -540,10 +541,14 @@ async function stopRun() {
   if (!busy) return;
   runLabel('Stopping…');
   const response = await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
+  if (!abortSucceeded(response)) {
+    runLabel('still running');
+    return;
+  }
   flushText();
   finalizeStream();
   finalizeOpenTools(false, 'stopped');
-  setComposerBusy(false, response?.aborted || response?.ok ? 'stopped' : 'idle');
+  setComposerBusy(false, 'stopped');
 }
 
 function setStatus(state) {

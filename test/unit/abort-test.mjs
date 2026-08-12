@@ -3,7 +3,7 @@
  * SSE server. Fails if abort is a no-op (the run would hang until timeout).
  */
 import http from 'node:http';
-import { AGUIClient } from '../../extension/lib/agui-client.js';
+import { AGUIClient, abortSucceeded } from '../../extension/lib/agui-client.js';
 
 let passed = 0;
 let failed = 0;
@@ -22,12 +22,31 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
 const client = new AGUIClient({ url: `http://127.0.0.1:${port}/agent` });
 
-ok(client.abortRun() === false, 'abortRun is a no-op when no run is in flight');
+ok(abortSucceeded({ ok: true, aborted: false }) === false, 'ok:true without aborted is not a successful stop');
+ok(abortSucceeded({ ok: true, aborted: true }) === true, 'aborted:true is a successful stop');
+ok(client.abortRun() === true, 'abortRun records a cancel even before prepareRun');
+ok(client.wasCanceled() === true, 'wasCanceled is true after abortRun');
 
-const run = client.runAgent({ messages: [{ role: 'user', content: 'hang' }] });
+const preflight = new AGUIClient({ url: 'http://127.0.0.1:9/agent' });
+preflight.prepareRun();
+ok(preflight.abortRun() === true, 'abortRun succeeds during preflight before fetch');
+let preflightAborted = false;
+try {
+  await preflight.runAgent({ messages: [{ role: 'user', content: 'should not fetch' }] });
+} catch (error) {
+  preflightAborted = error?.name === 'AbortError' || /abort/i.test(String(error?.message || error));
+}
+ok(preflightAborted, 'runAgent honors cancel requested before fetch and does not start /agent');
+
+const idle = new AGUIClient({ url: `http://127.0.0.1:1/unused` });
+ok(idle.wasCanceled() === false, 'fresh client is not canceled');
+
+const live = new AGUIClient({ url: `http://127.0.0.1:${port}/agent` });
+live.prepareRun();
+const run = live.runAgent({ messages: [{ role: 'user', content: 'hang' }] });
 await new Promise((resolve) => setTimeout(resolve, 80));
-ok(client.busy === true, 'runAgent marks the client busy');
-const aborted = client.abortRun();
+ok(live.busy === true, 'runAgent marks the client busy');
+const aborted = live.abortRun();
 ok(aborted === true, 'abortRun returns true for an in-flight fetch');
 
 let sawAbort = false;
@@ -44,7 +63,7 @@ try {
   }
 }
 ok(sawAbort, 'abort cancels the in-flight AG-UI fetch');
-ok(client.busy === false, 'client is idle after abort');
+ok(live.busy === false, 'client is idle after abort');
 
 server.close();
 console.log(`\n[${passed} passed, ${failed} failed]`);

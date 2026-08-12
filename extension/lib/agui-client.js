@@ -53,6 +53,19 @@ function uid(prefix = '') {
   return prefix + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+export function abortError() {
+  try { return new DOMException('The operation was aborted.', 'AbortError'); }
+  catch {
+    const error = new Error('The operation was aborted.');
+    error.name = 'AbortError';
+    return error;
+  }
+}
+
+export function abortSucceeded(response) {
+  return Boolean(response && response.aborted);
+}
+
 /**
  * AGUIClient — connects to an AG-UI compatible agent endpoint (local Hermes
  * bridge or BrowserOS) and streams events.
@@ -70,6 +83,20 @@ export class AGUIClient extends Emitter {
     this.onEvent = opts.onEvent || null;
     this.abort = null;
     this.busy = false;
+    this.cancelRequested = false;
+  }
+
+  /** Install the AbortController before slow pre-flight work (page snapshot). */
+  prepareRun() {
+    const already = this.cancelRequested;
+    this.abort = new AbortController();
+    this.busy = true;
+    if (already) this.abort.abort();
+    return this.abort;
+  }
+
+  wasCanceled() {
+    return Boolean(this.cancelRequested || this.abort?.signal?.aborted);
   }
 
   /**
@@ -82,11 +109,18 @@ export class AGUIClient extends Emitter {
     const threadId = input.threadId || uid('thread_');
     const body = { ...input, runId, threadId };
 
-    // Reset per-run streamed message/tool buffers (top-level; the caller may
-    // also re-enter on retry).
-    const ctrl = new AbortController();
+    // Reuse a controller installed by prepareRun() so Stop works during
+    // snapshot/preflight, before fetch starts.
+    const ctrl = this.abort || new AbortController();
     this.abort = ctrl;
     this.busy = true;
+    if (this.cancelRequested || ctrl.signal.aborted) {
+      const error = abortError();
+      this.busy = false;
+      this.abort = null;
+      this.cancelRequested = false;
+      throw error;
+    }
 
     const messageBuf = new Map();   // messageId -> {role, text}
     const toolBuf = new Map();      // toolCallId -> {name, args}
@@ -155,12 +189,13 @@ export class AGUIClient extends Emitter {
     } finally {
       this.busy = false;
       this.abort = null;
+      this.cancelRequested = false;
     }
   }
 
   abortRun() {
-    if (!this.abort) return false;
-    this.abort.abort();
+    this.cancelRequested = true;
+    if (this.abort) this.abort.abort();
     return true;
   }
 

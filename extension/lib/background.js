@@ -444,10 +444,27 @@ async function runActionOnTab(action, tabId, depth = 0) {
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
+let runCanceled = false;
+
+function abortedResult() {
+  if (client) {
+    client.busy = false;
+    client.cancelRequested = false;
+    client.abort = null;
+  }
+  emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+  return { aborted: true };
+}
+
 async function chat(userText, opts = {}) {
-  const cfg = await store.get();
+  runCanceled = false;
   if (!client) client = await buildClient();
+  client.prepareRun();
   if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) connectBridgeWs();
+  if (runCanceled || client.wasCanceled()) return abortedResult();
+
+  const cfg = await store.get();
+  if (runCanceled || client.wasCanceled()) return abortedResult();
 
   const extra = {};
   const requestedModel = opts.model || cfg.model;
@@ -487,8 +504,10 @@ async function chat(userText, opts = {}) {
       emit('page-context-status', { ok: false, error: 'Could not read the active page. It may be a restricted browser page.' });
     }
   }
+  if (runCanceled || client.wasCanceled()) return abortedResult();
 
   emit('run-start', { userText });
+  if (runCanceled || client.wasCanceled()) return abortedResult();
 
   try {
     const input = {
@@ -550,9 +569,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'abort-run': {
-      const aborted = Boolean(client?.abortRun?.());
-      if (aborted) emit('run-end', { ok: false, aborted: true, error: 'stopped' });
-      sendResponse({ ok: true, aborted });
+      runCanceled = true;
+      const aborted = client?.abortRun ? client.abortRun() : true;
+      emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+      sendResponse({ ok: true, aborted: Boolean(aborted) });
       return true;
     }
     case 'read-page': {
