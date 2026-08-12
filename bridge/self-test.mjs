@@ -65,7 +65,7 @@ const fake = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.includes('/api/providers')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      providers: [{ id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model'] }],
+      providers: [{ id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model', { id: 'object-model', label: 'Object Model' }] }],
       active_provider: 'lmstudio'
     }));
     return;
@@ -178,7 +178,7 @@ async function main() {
     hz = { error: e.message };
   }
   ok(hz.ok === true && hz.hermesOk === true, 'healthz reports Hermes reachable');
-  ok(hz.version === '0.3.0' && hz.authRequired === true, 'healthz exposes secured bridge version');
+  ok(hz.version === '0.3.1' && hz.authRequired === true, 'healthz exposes secured bridge version');
 
   // Model discovery.
   let models = {};
@@ -186,6 +186,7 @@ async function main() {
     models = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/models`, { headers: authHeaders })).json();
   } catch {}
   ok(models.data?.some((m) => m.id === '@lmstudio:fake-model'), 'model endpoint flattens configured Hermes provider');
+  ok(models.data?.some((m) => m.id === '@lmstudio:object-model' && m.label === 'Object Model'), 'object-shaped models keep a qualified provider id');
 
   // Hermes-native toolset + skill metadata.
   let runtime = {};
@@ -233,6 +234,7 @@ async function main() {
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
   ok(body.includes('"phase":"browser"'), 'mirrorable browser tool is dispatched to companion');
   ok(body.includes('"kind":"tool-result"') && body.includes('Fake active tab'), 'companion result is returned in AG-UI stream');
+  ok(body.indexOf('"TOOL_CALL_START"') >= 0 && body.indexOf('"TOOL_CALL_START"') < body.indexOf('"kind":"tool-result"'), 'tool cards start before companion results arrive');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
   ok(body.includes('"RUN_FINISHED"'), 'emits RUN_FINISHED without orphan stream');
 
@@ -252,6 +254,19 @@ async function main() {
   ok(firstChatPrompt.includes('[USER REQUEST]\nsummarize this page'), 'Hermes prompt includes current user message');
   ok(firstChatPrompt.includes('[PAGE CONTEXT]') && firstChatPrompt.includes('https://example.com'), 'Hermes prompt includes page context');
   ok(sentMessage.includes('[VERIFIED ACTIVE TAB RESULTS]') && sentMessage.includes('Fake active tab'), 'next turn receives verified active-tab result');
+
+  const isolated = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      messages: [{ role: 'user', content: 'start a fresh conversation' }]
+    })
+  });
+  await isolated.text();
+  const isolatedPrompt = String(lastChatStartPayload?.message || '');
+  ok(!isolatedPrompt.includes('[VERIFIED ACTIVE TAB RESULTS]'), 'a new thread does not inherit another conversation\'s tab results');
+
   ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console()') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
   ok(firstChatPrompt.includes('browser_check(@eN)') && firstChatPrompt.includes('browser_evaluate(expression)') && firstChatPrompt.includes('browser_tabs()'), 'prompt advertises expanded BrowserOS-parity tools');
 

@@ -55,6 +55,33 @@ const hermes = new HermesClient({
   workspace: cfg.workspace
 });
 const hermesSessions = new Map();
+const MAX_THREAD_STATE = 32;
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
+function rememberThread(map, key, value) {
+  if (!key) return;
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_THREAD_STATE) {
+    const oldest = map.keys().next().value;
+    map.delete(oldest);
+  }
+}
+
+async function readRequestBody(req, limit = MAX_BODY_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      const error = new Error('request_too_large');
+      error.code = 'request_too_large';
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 // ---------------------------------------------------------------------------
 // Request security
@@ -156,7 +183,7 @@ function resolveToolResult(payload = {}) {
       result: payload.result || payload,
       timestamp: Date.now()
     });
-    threadMirrorResults.set(mirror.threadId, history.slice(-8));
+    rememberThread(threadMirrorResults, mirror.threadId, history.slice(-8));
     if (!mirror.res.writableEnded) {
       mirror.res.write(sse(custom('tool-result', {
         requestId,
@@ -169,13 +196,33 @@ function resolveToolResult(payload = {}) {
   return true;
 }
 
+function actionReadyToMirror(action) {
+  if (!action?.name) return false;
+  const params = action.params || {};
+  const needsTarget = new Set([
+    'click', 'set_value', 'type_into', 'check', 'uncheck', 'clear', 'hover',
+    'focus', 'select_option', 'read', 'fill_many', 'drag'
+  ]);
+  if (action.name === 'navigate') return Boolean(params.url);
+  if (action.name === 'key') return Boolean(params.keys);
+  if (action.name === 'grep') return Boolean(params.pattern);
+  if (action.name === 'evaluate') return Boolean(params.expression);
+  if (action.name === 'fill_many') return Array.isArray(params.fields) && params.fields.length > 0;
+  if (action.name === 'drag') return Boolean(params.ref && params.targetRef);
+  if (action.name === 'click_at' || action.name === 'hover_at') {
+    return Number.isFinite(Number(params.x)) && Number.isFinite(Number(params.y));
+  }
+  if (needsTarget.has(action.name)) return Boolean(params.selector);
+  return true;
+}
+
 function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools) {
   if (!isBrowserCompanionTool(tool.name) || mirroredTools.has(toolCallId)) return;
   let args;
   try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
   catch { return; } // streamed JSON is not complete yet
   const action = normalizeBrowserTool(tool.name, args);
-  if (!action) return;
+  if (!action || !actionReadyToMirror(action)) return;
   mirroredTools.add(toolCallId);
   const requestId = uid('browser_');
   const sent = wsSend({ kind: 'browser-action', requestId, toolCallId, action });
@@ -354,7 +401,7 @@ async function runAgent(threadId, runId, input, res) {
   res.write(sse(messagesSnapshot(roleMessages)));
   if (input.state) res.write(sse(stateSnapshot(input.state)));
 
-  const userText = buildHermesPrompt(input);
+  const userText = buildHermesPrompt(input, threadId);
   const messageId = uid('asst_');
 
   try {
@@ -364,7 +411,7 @@ async function runAgent(threadId, runId, input, res) {
       workspace: input.workspace,
       sessionId: hermesSessions.get(threadId) || undefined
     });
-    if (threadId && sessionId) hermesSessions.set(threadId, sessionId);
+    if (threadId && sessionId) rememberThread(hermesSessions, threadId, sessionId);
 
     res.write(sse(textStart(messageId)));
     const toolAccum = new Map();
@@ -406,6 +453,7 @@ async function runAgent(threadId, runId, input, res) {
 
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
+          res.write(sse(toolStart(tcid, existing.name)));
           res.write(sse(custom('agent-status', {
             phase: 'tool',
             label: existing.name ? `Using ${existing.name}…` : 'Using a tool…',
@@ -422,7 +470,7 @@ async function runAgent(threadId, runId, input, res) {
     res.write(sse(textEnd(messageId)));
 
     for (const [tcid, tool] of toolAccum) {
-      res.write(sse(toolStart(tcid, tool.name)));
+      if (!announcedTools.has(tcid)) res.write(sse(toolStart(tcid, tool.name)));
       res.write(sse(toolDelta(tcid, tool.args)));
       res.write(sse(toolEnd(tcid)));
     }
@@ -443,7 +491,7 @@ async function runAgent(threadId, runId, input, res) {
 }
 
 /** Build the Hermes turn with page context + role-preserving conversation. */
-function buildHermesPrompt(input) {
+function buildHermesPrompt(input, threadId = input.threadId) {
   const parts = [];
 
   for (const ctx of input.context || []) {
@@ -472,7 +520,7 @@ function buildHermesPrompt(input) {
     else if (role === 'user') parts.push(`[USER REQUEST]\n${content}`);
   }
 
-  const mirrorResults = threadMirrorResults.get(input.threadId) || [];
+  const mirrorResults = threadMirrorResults.get(threadId) || [];
   if (mirrorResults.length) {
     parts.push(`[VERIFIED ACTIVE TAB RESULTS]\n${mirrorResults.map((item) => `- ${item.toolName || 'browser tool'}: ${JSON.stringify(item.result)}`).join('\n')}`);
   }
@@ -550,11 +598,11 @@ async function modelInventory() {
         const id = typeof item === 'string' ? item : item.id;
         if (!id) continue;
         out.push({
+          ...(typeof item === 'object' && item ? item : {}),
           id: group.id === 'moa' ? id : `@${group.id}:${id}`,
           label: typeof item === 'string' ? item : (item.label || id),
           provider: group.id,
-          providerLabel: group.display_name || group.id,
-          ...(typeof item === 'object' && item ? item : {})
+          providerLabel: group.display_name || group.id
         });
       }
     }
@@ -655,14 +703,18 @@ const server = http.createServer(async (req, res) => {
       wsClients: wsClients.size,
       pendingBrowserActions: pendingToolResults.size,
       authRequired: Boolean(cfg.authToken),
-      version: '0.3.0'
+      version: '0.3.1'
     });
     return;
   }
 
   if (req.method === 'POST' && route === '/tool-result') {
-    let body = '';
-    for await (const chunk of req) body += chunk;
+    let body;
+    try { body = await readRequestBody(req); }
+    catch (e) {
+      json(res, e.code === 'request_too_large' ? 413 : 400, { error: e.message });
+      return;
+    }
     let payload;
     try { payload = JSON.parse(body); } catch { payload = {}; }
     const matched = resolveToolResult({ kind: 'browser-result', ...payload });
@@ -671,8 +723,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && route === '/agent') {
-    let body = '';
-    for await (const chunk of req) body += chunk;
+    let body;
+    try { body = await readRequestBody(req); }
+    catch (e) {
+      json(res, e.code === 'request_too_large' ? 413 : 400, { error: e.message });
+      return;
+    }
     let input;
     try {
       input = JSON.parse(body);

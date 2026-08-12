@@ -94,7 +94,10 @@ export class AGUIClient extends Emitter {
 
     const dispatch = (evt) => {
       // Normalize the event once; keep a run-local accumulator.
-      if (evt.type === EventType.TEXT_MESSAGE_START || evt.type === EventType.TEXT_MESSAGE_CHUNK) {
+      if (evt.type === EventType.RUN_STARTED) {
+        if (evt.threadId) state.threadId = evt.threadId;
+        if (evt.runId) state.runId = evt.runId;
+      } else if (evt.type === EventType.TEXT_MESSAGE_START || evt.type === EventType.TEXT_MESSAGE_CHUNK) {
         const id = evt.messageId || evt.type + uid();
         const buf = messageBuf.get(id) || { role: evt.role || 'assistant', text: '' };
         messageBuf.set(id, buf);

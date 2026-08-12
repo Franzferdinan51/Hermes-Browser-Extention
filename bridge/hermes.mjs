@@ -35,10 +35,19 @@ export class HermesClient extends EventEmitter {
       body: JSON.stringify({ password: this.password })
     });
     if (!r.ok) throw new Error(`Hermes login: HTTP ${r.status}`);
-    const sc = r.headers.get('set-cookie') || '';
-    const m = sc.match(/(?:^|,\s*)(?:[^;]+;\s*)?hermes_session(?:_at)?=([^;]+)/);
-    if (!m) throw new Error('Hermes login OK but no hermes_session cookie');
-    this._cookie = `hermes_session=${m[1]}`;
+    const cookies = typeof r.headers.getSetCookie === 'function'
+      ? r.headers.getSetCookie()
+      : [r.headers.get('set-cookie') || ''];
+    let session = '';
+    for (const header of cookies) {
+      const match = String(header || '').match(/(?:^|[,\s])hermes_session=([^;]+)/);
+      if (match) {
+        session = match[1];
+        break;
+      }
+    }
+    if (!session) throw new Error('Hermes login OK but no hermes_session cookie');
+    this._cookie = `hermes_session=${session}`;
     this._cookieExpiry = Date.now() + 25 * 60_000;
     return this._cookie;
   }
@@ -161,8 +170,14 @@ export class HermesClient extends EventEmitter {
    */
   async chatStream(message, extra = {}) {
     const cookie = await this._login();
-    let sessionId = extra.sessionId || this._sessionId;
-    if (!sessionId) sessionId = await this._ensureSession();
+    // Only reuse a Hermes session when the caller mapped one to this thread.
+    // Falling back to the singleton session made "New conversation" continue
+    // the previous Hermes turn.
+    let sessionId = extra.sessionId || null;
+    if (!sessionId) {
+      this.resetSession();
+      sessionId = await this._ensureSession();
+    }
     this._sessionId = sessionId;
 
     const modelProvider = extra.modelProvider || this.modelProvider;

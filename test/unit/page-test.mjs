@@ -32,6 +32,7 @@ const html = `<!doctype html>
   <div id="drag-source">Drag source</div><div id="drag-target">Drop target</div>
   <img id="hero" src="https://example.com/hero.png" alt="Hero image" width="640" height="320" />
   <div style="display:none"><button>Hidden Button</button></div>
+  <button id="below-fold" style="position:absolute;top:5000px;left:0">Below Fold</button>
 </body>
 </html>`;
 
@@ -144,6 +145,8 @@ const btn = snap.interactive.find((i) => i.tag === 'button' && i.text.includes('
 ok(!!btn, 'interactive map exposes the Buy Now button');
 const hidden = snap.interactive.find((i) => i.text.includes('Hidden Button'));
 ok(!hidden, 'hidden element is excluded from interactive map');
+const belowFold = snap.interactive.find((i) => i.text.includes('Below Fold'));
+ok(!!belowFold, 'off-viewport interactive elements are still captured');
 ok(typeof snap.dom === 'string' && snap.dom.length > 0, 'buildDomText produces a DOM string');
 const refButton = snap.interactive.find((i) => i.text.includes('Buy Now'));
 ok(/^e\d+$/.test(refButton?.ref || '') && String(snap.accessibility).includes(`[${refButton.ref}]`), 'accessibility snapshot exposes stable element refs');
@@ -178,6 +181,10 @@ async function drive() {
   ok(fillManyRes.ok && document.getElementById('q').value === 'multi' && document.querySelector('textarea[name="notes"]').value === 'note', 'actor fills multiple fields');
   const evalRes = await actor.runAction({ name: 'evaluate', params: { expression: 'document.title' } });
   ok(evalRes.ok && String(evalRes.value).includes('Test Page'), 'actor evaluates read-only page expression');
+  const evalWrite = await actor.runAction({ name: 'evaluate', params: { expression: 'document.title = "nope"' } });
+  ok(!evalWrite.ok, 'actor rejects write evaluate expressions');
+  const badNav = await actor.runAction({ name: 'navigate', params: { url: 'javascript:alert(1)' } });
+  ok(!badNav.ok, 'actor rejects non-http(s) navigation');
   const diffRes = await actor.runAction({ name: 'diff', params: { baseline: 'stale-baseline' } });
   ok(diffRes.ok && diffRes.isChanged === true, 'actor reports page diff');
   const dragRes = await actor.runAction({ name: 'drag', params: { ref: '#drag-source', targetRef: '#drag-target' } });

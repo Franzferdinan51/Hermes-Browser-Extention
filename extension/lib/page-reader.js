@@ -30,9 +30,9 @@ function cleanText(s) {
 
 function isVisible(el) {
   if (!el || el.nodeType !== 1) return false;
+  if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
   const r = el.getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return false;
-  if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
   const cs = getComputedStyle(el);
   if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
   return true;
@@ -172,7 +172,7 @@ function summary(root = document) {
   const text = cleanText((root.body ? root.body.innerText || '' : root.innerText || '')).slice(0, 12000);
   const h1 = Array.from(root.querySelectorAll('h1,h2')).map((h) => cleanText(h.textContent)).filter(Boolean).slice(0, 12);
   const forms = root.querySelectorAll('form').length;
-  const links = isVisible ? Array.from(root.querySelectorAll('a[href]')).filter(isVisible).length : 0;
+  const links = Array.from(root.querySelectorAll('a[href]')).filter(isVisible).length;
   return { text, headings: h1, forms, links, buttons: root.querySelectorAll('button').length, inputs: root.querySelectorAll('input,textarea,select').length, images: root.querySelectorAll('img').length };
 }
 

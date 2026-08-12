@@ -293,10 +293,16 @@ async function actionWait(p = {}) {
 }
 
 function actionNavigate(p = {}) {
-  const url = String(p.url || p.href || '').trim();
-  if (!url) return { ok: false, error: 'navigate requires url' };
-  location.assign(url);
-  return { ok: true, value: `navigating to ${url}` };
+  const raw = String(p.url || p.href || '').trim();
+  if (!raw) return { ok: false, error: 'navigate requires url' };
+  let url;
+  try { url = new URL(raw, location.href); }
+  catch { return { ok: false, error: 'navigate requires a valid URL' }; }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    return { ok: false, error: 'Navigation requires a valid http(s) URL' };
+  }
+  location.assign(url.href);
+  return { ok: true, value: `navigating to ${url.href}` };
 }
 
 function actionBack() {
@@ -454,8 +460,11 @@ function actionDiff(p = {}) {
 function actionEvaluate(p = {}) {
   const expr = String(p.expression || p.script || p.js || '').trim();
   if (!expr) return { ok: false, error: 'evaluate requires expression' };
+  if (/\b(eval|Function|import|require)\b/.test(expr) || /(?:^|[^=!<>])=(?!=)/.test(expr)) {
+    return { ok: false, error: 'evaluate only allows read-only expressions' };
+  }
   try {
-    const result = new Function(`with(document){return (${expr});}`)();
+    const result = new Function('document', 'location', `return (${expr});`)(document, location);
     const value = (() => {
       try { return JSON.stringify(result, null, 0)?.slice(0, 20000); } catch { return String(result); }
     })();

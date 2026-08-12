@@ -14,6 +14,7 @@ let bridgeConnected = false;
 let currentStream = null;
 let runtimeData = null;
 const toolCards = new Map();
+const pendingToolResults = new Map();
 
 function scrollChat() {
   chatEl.scrollTop = chatEl.scrollHeight;
@@ -234,6 +235,11 @@ function openTool(name, toolCallId) {
 
   const card = { id, el: details, argsEl: args, statusEl: status, name: name || 'tool', args: '' };
   toolCards.set(id, card);
+  const pending = pendingToolResults.get(id);
+  if (pending) {
+    pendingToolResults.delete(id);
+    finalizeTool(id, pending.ok, pending.value);
+  }
   return card;
 }
 
@@ -248,7 +254,10 @@ function appendToolArgs(toolCallId, delta) {
 function finalizeTool(toolCallId, resultOk, resultValue) {
   let card = toolCards.get(toolCallId);
   if (!card && toolCards.size === 1) card = [...toolCards.values()][0];
-  if (!card) return;
+  if (!card) {
+    if (toolCallId) pendingToolResults.set(toolCallId, { ok: resultOk, value: resultValue });
+    return;
+  }
 
   card.el.classList.remove('pending');
   card.el.classList.add(resultOk === false ? 'err' : 'ok');
@@ -708,6 +717,7 @@ $('btnClear').addEventListener('click', async () => {
   emptyEl.style.display = '';
   currentStream = null;
   toolCards.clear();
+  pendingToolResults.clear();
   pendingText = '';
   if (textTimer) clearTimeout(textTimer);
   textTimer = null;
@@ -722,6 +732,11 @@ $('refreshRuntime').addEventListener('click', (event) => {
   loadRuntime(true).catch(() => {});
 });
 $('modelSelect').addEventListener('change', chooseModel);
+$('autoSnap').addEventListener('change', async () => {
+  const attachPageContext = $('autoSnap').checked;
+  config = { ...(config || {}), attachPageContext };
+  await chrome.runtime.sendMessage({ kind: 'set-config', patch: { attachPageContext } }).catch(() => null);
+});
 if ($('modelFilter')) $('modelFilter').addEventListener('input', renderModels);
 $('refreshModels').addEventListener('click', () => loadModels(selectedModelId || config?.model, selectedProvider || config?.modelProvider));
 

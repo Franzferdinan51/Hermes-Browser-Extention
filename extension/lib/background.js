@@ -65,8 +65,10 @@ async function buildClient() {
 
 async function handleEvent(evt) {
   try {
-    if (evt.type === 'RUN_STARTED') emit('agent-state', { phase: 'running' });
-    else if (evt.type === 'RUN_FINISHED') emit('agent-state', { phase: 'done' });
+    if (evt.type === 'RUN_STARTED') {
+      if (evt.threadId) currentThreadId = evt.threadId;
+      emit('agent-state', { phase: 'running' });
+    } else if (evt.type === 'RUN_FINISHED') emit('agent-state', { phase: 'done' });
     else if (evt.type === 'RUN_ERROR') emit('agent-state', { phase: 'error' });
   } catch (e) {
     console.error('[Hermes] handleEvent', e);
@@ -78,6 +80,7 @@ async function handleEvent(evt) {
 // ---------------------------------------------------------------------------
 let bridgeWs = null;
 let bridgeReconnectTimer = null;
+let bridgeConnecting = false;
 
 async function wsBridgeUrl() {
   const cfg = await store.get();
@@ -97,19 +100,23 @@ function scheduleBridgeReconnect() {
 
 function connectBridgeWs() {
   try {
+    if (bridgeConnecting) return;
     if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) return;
   } catch {
     bridgeWs = null;
   }
 
+  bridgeConnecting = true;
   wsBridgeUrl().then((url) => {
     try { bridgeWs = new WebSocket(url); }
     catch {
+      bridgeConnecting = false;
       scheduleBridgeReconnect();
       return;
     }
 
     bridgeWs.onopen = () => {
+      bridgeConnecting = false;
       console.log('[Hermes] bridge WS open');
       emit('bridge-status', { connected: true });
     };
@@ -135,6 +142,7 @@ function connectBridgeWs() {
     };
 
     bridgeWs.onclose = () => {
+      bridgeConnecting = false;
       bridgeWs = null;
       emit('bridge-status', { connected: false });
       scheduleBridgeReconnect();
@@ -142,7 +150,10 @@ function connectBridgeWs() {
     bridgeWs.onerror = () => {
       try { bridgeWs.close(); } catch {}
     };
-  }).catch(() => scheduleBridgeReconnect());
+  }).catch(() => {
+    bridgeConnecting = false;
+    scheduleBridgeReconnect();
+  });
 }
 connectBridgeWs();
 
@@ -234,26 +245,31 @@ function capturePageInline() {
         aria: node.getAttribute('aria-label') || '', role: node.getAttribute('role') || ''
       };
     });
+    const text = clean((document.body && (document.body.innerText || document.body.textContent)) || '').slice(0, 12000);
     return {
       ok: true,
-      url: location.href,
-      title: document.title,
-      text: clean(document.body.innerText || document.body.textContent || '').slice(0, 12000),
-      interactive,
-      accessibility: visible('h1,h2,h3,a,button,input,select,textarea,[role="button"],[role="link"]').map((node) => {
-        const ref = node.getAttribute('data-hermes-ref') || '';
-        const label = clean(node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.textContent || node.value || '').slice(0, 180);
-        return `[${ref}] ${node.tagName.toLowerCase()}${label ? ': ' + label : ''}`;
-      }).join('\n')
+      snapshot: {
+        url: location.href,
+        title: document.title,
+        text,
+        dom: text,
+        interactive,
+        accessibility: visible('h1,h2,h3,a,button,input,select,textarea,[role="button"],[role="link"]').map((node) => {
+          const ref = node.getAttribute('data-hermes-ref') || '';
+          const label = clean(node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.textContent || node.value || '').slice(0, 180);
+          return `[${ref}] ${node.tagName.toLowerCase()}${label ? ': ' + label : ''}`;
+        }).join('\n'),
+        signals: []
+      }
     };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
 
-function safeNavigationUrl(value) {
+function safeNavigationUrl(value, base) {
   try {
-    const url = new URL(String(value || '').trim());
+    const url = new URL(String(value || '').trim(), base || undefined);
     if (!['http:', 'https:'].includes(url.protocol)) return null;
     return url.href;
   } catch {
@@ -261,10 +277,11 @@ function safeNavigationUrl(value) {
   }
 }
 
-async function runNativeTabAction(name, params, tabId) {
+async function runNativeTabAction(name, params, tabId, depth = 0) {
   switch (name) {
     case 'navigate': case 'goto': case 'open': {
-      const url = safeNavigationUrl(params.url || params.href);
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      const url = safeNavigationUrl(params.url || params.href, tab?.url);
       if (!url) return { ok: false, error: 'Navigation requires a valid http(s) URL' };
       await chrome.tabs.update(tabId, { url });
       lastSnapshot = null;
@@ -313,20 +330,31 @@ async function runNativeTabAction(name, params, tabId) {
       return { ok: true, value: windows.map((win) => ({ id: win.id, focused: !!win.focused, state: win.state || '', type: win.type || '' })) };
     }
     case 'tab_groups': case 'tab-groups': {
-      const groups = await chrome.tabGroups?.query({}) || [];
-      return { ok: true, value: groups.map((group) => ({ id: group.id, title: group.title || '', color: group.color || '', collapsed: !!group.collapsed, windowId: group.windowId })) };
+      if (!chrome.tabGroups?.query) return { ok: false, error: 'tabGroups API is unavailable in this browser' };
+      try {
+        const groups = await chrome.tabGroups.query({});
+        return { ok: true, value: groups.map((group) => ({ id: group.id, title: group.title || '', color: group.color || '', collapsed: !!group.collapsed, windowId: group.windowId })) };
+      } catch (e) {
+        return { ok: false, error: `tab groups unavailable: ${e.message}` };
+      }
     }
     case 'history': {
+      if (!chrome.history?.search) return { ok: false, error: 'history permission is not granted' };
       const items = await chrome.history.search({ text: params.text || params.query || '', startTime: params.startTime, endTime: params.endTime, maxResults: Math.min(Number(params.limit) || 50, 200) });
       return { ok: true, value: items.map((item) => ({ id: item.id, title: item.title || '', url: item.url || '', lastVisitTime: item.lastVisitTime || 0, visitCount: item.visitCount || 0 })) };
     }
     case 'downloads': case 'download': {
+      if (!chrome.downloads?.search) return { ok: false, error: 'downloads permission is not granted' };
       const items = await chrome.downloads.search({ query: params.query ? [String(params.query)] : undefined, limit: Math.min(Number(params.limit) || 50, 200) });
       return { ok: true, value: items.map((item) => ({ id: item.id, filename: item.filename || '', url: item.url || '', state: item.state || '', bytesReceived: item.bytesReceived || 0, totalBytes: item.totalBytes || 0 })) };
     }
     case 'screenshot': case 'capture': {
-      const dataUrl = await chrome.tabs.captureVisibleTab(params.windowId || null, { format: params.format === 'jpeg' ? 'jpeg' : 'png', quality: Number(params.quality) || 90 });
-      return { ok: true, value: { dataUrl, format: params.format === 'jpeg' ? 'jpeg' : 'png' } };
+      try {
+        const dataUrl = await chrome.tabs.captureVisibleTab(params.windowId || undefined, { format: params.format === 'jpeg' ? 'jpeg' : 'png', quality: Number(params.quality) || 90 });
+        return { ok: true, value: { dataUrl, format: params.format === 'jpeg' ? 'jpeg' : 'png' } };
+      } catch (e) {
+        return { ok: false, error: `screenshot failed: ${e.message}` };
+      }
     }
     case 'pdf': {
       return { ok: false, error: 'PDF export requires the BrowserOS/CDP backend; Chrome MV3 does not expose tabs.printToPDF' };
@@ -338,7 +366,7 @@ async function runNativeTabAction(name, params, tabId) {
       const actions = Array.isArray(params.actions) ? params.actions : [];
       if (!actions.length) return { ok: false, error: 'run requires actions[]' };
       const results = [];
-      for (const action of actions) results.push(await runActionOnTab(action, tabId));
+      for (const action of actions) results.push(await runActionOnTab(action, tabId, depth + 1));
       return { ok: results.every((result) => result?.ok !== false), value: results };
     }
     default:
@@ -346,16 +374,17 @@ async function runNativeTabAction(name, params, tabId) {
   }
 }
 
-async function runActionOnTab(action, tabId) {
+async function runActionOnTab(action, tabId, depth = 0) {
   const cfg = await store.get();
   if (!cfg.enablePageActing) return { ok: false, error: 'Page acting is disabled in Hermes Browser settings' };
   if (tabId == null) return { ok: false, error: 'No active tab' };
   if (!action || typeof action !== 'object') return { ok: false, error: 'No browser action supplied' };
+  if (depth > 8) return { ok: false, error: 'action nest limit exceeded' };
 
   const name = String(action.name || action.action || '').replace(/^browser[:_-]?/, '').toLowerCase();
   const params = action.params || action.payload || action.args || action;
 
-  const native = await runNativeTabAction(name, params, tabId);
+  const native = await runNativeTabAction(name, params, tabId, depth);
   if (native) return native;
 
   let resp = await chrome.tabs.sendMessage(tabId, { kind: 'run-action', action }).catch(() => null);
@@ -427,6 +456,7 @@ async function chat(userText, opts = {}) {
     };
     const result = await client.runAgent(input);
     if (result.state?.threadId) currentThreadId = result.state.threadId;
+    else if (!currentThreadId && input.threadId) currentThreadId = input.threadId;
     emit('run-end', { ok: true, result });
     return result;
   } catch (e) {
@@ -481,8 +511,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     case 'set-config': {
       store.set(msg.patch || {}).then(async () => {
-        lastRuntime = null;
-        await buildClient();
+        const keys = Object.keys(msg.patch || {});
+        if (keys.some((key) => key === 'bridgeUrl' || key === 'authToken')) {
+          lastRuntime = null;
+          await buildClient();
+        }
         sendResponse({ ok: true });
       }).catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;

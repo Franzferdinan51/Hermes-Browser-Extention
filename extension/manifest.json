@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Hermes Agent — Browser Companion",
   "short_name": "Hermes",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Connect Hermes to the browser over AG-UI with live toolset/skill discovery, page context, rich streaming responses, and correlated DOM actions.",
   "permissions": [
     "sidePanel",
@@ -10,6 +10,7 @@
     "activeTab",
     "scripting",
     "tabs",
+    "tabGroups",
     "history",
     "downloads",
     "clipboardWrite"
@@ -42,12 +43,6 @@
       "run_at": "document_idle",
       "all_frames": false,
       "match_about_blank": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["lib/page-reader.js", "lib/page-actor.js"],
-      "matches": ["<all_urls>"]
     }
   ],
   "icons": {

@@ -2,7 +2,7 @@
 
 A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-**Current release: 0.3.0**
+**Current release: 0.3.1**
 
 Sources and design references:
 
@@ -10,6 +10,16 @@ Sources and design references:
 - **AG-UI** — MIT — agent ↔ UI event protocol
 - **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
 - **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
+
+## What 0.3.1 fixes
+
+- Conversation threads now persist from `RUN_STARTED`, so later turns keep the same Hermes session and verified active-tab results.
+- **New conversation** starts a new Hermes session instead of silently continuing the previous one.
+- Tool cards open as soon as Hermes starts a tool, so companion results are not dropped when they arrive mid-stream.
+- Object-shaped Hermes model entries keep a qualified `@provider:id` instead of being overwritten by the raw model id.
+- Off-viewport controls are included in page snapshots, and `javascript:` navigation is rejected.
+- Content scripts no longer inject page-reader/actor into the page’s main world (that caused CSP noise and leaked helpers onto `window`).
+- Hermes login reads `Set-Cookie` via `getSetCookie()`, so a multi-cookie login response still yields `hermes_session`.
 
 ## What 0.3.0 adds
 
@@ -189,7 +199,7 @@ Bridge test:
 cd bridge
 npm ci
 npm test
-# expected contract: 24 passed, 0 failed
+# expected contract: 29 passed, 0 failed
 ```
 
 The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.
@@ -200,7 +210,7 @@ Page reader/actor test:
 cd test
 npm ci
 npm test
-# expected contract: 21 passed, 0 failed
+# expected contract: 31 passed, 0 failed
 ```
 
 GitHub Actions runs both suites plus `node --check` over the extension modules. The workflow also supports a manual run from the Actions tab.
