@@ -361,6 +361,28 @@ async function main() {
   ok(sentMessage.includes('[VERIFIED ACTIVE TAB RESULTS]') && sentMessage.includes('Fake active tab'), 'next turn receives verified active-tab result');
   ok(sentMessage.includes('[WORKING BROWSER]') && sentMessage.includes('https://example.com'), 'follow-up stays bound to the attached Chrome tab');
 
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      threadId: 'thread_t1',
+      runId: 'run_t1b',
+      attachPage: true,
+      attachedTab: { id: 77, url: 'https://example.com/next-page', title: 'Next' },
+      context: [{
+        type: 'page_context',
+        url: 'https://example.com/next-page',
+        title: 'Next',
+        tabId: 77,
+        document: '<h1>Moved</h1>'
+      }],
+      messages: [{ role: 'user', content: 'now look at this page' }]
+    })
+  })).text();
+  const movedPrompt = String(lastChatStartPayload?.message || '');
+  ok(movedPrompt.includes('https://example.com/next-page') && movedPrompt.includes('[WORKING BROWSER]'), 'switching pages on the same thread updates the working-browser pin');
+
   const isolated = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',
     headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },

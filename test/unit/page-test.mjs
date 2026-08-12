@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { readThreadId, buildChatRequest } from '../../extension/lib/thread.js';
+import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript } from '../../extension/lib/thread.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.join(__dirname, '..', '..', 'extension');
@@ -257,6 +257,11 @@ async function drive() {
   const payload = buildChatRequest('follow up', { threadId: 'thread_live' }, { attachPage: true, sendToken: 7 });
   ok(payload.kind === 'chat' && payload.threadId === 'thread_live' && payload.text === 'follow up', 'buildChatRequest keeps the live thread on the next chat');
   ok(payload.sendToken === 7, 'buildChatRequest forwards the send token for run-end matching');
+  const bound = bindTabThread({}, 42, 'thread_tab');
+  ok(threadForTab(bound, 42) === 'thread_tab', 'each tab can keep its own conversation id');
+  ok(threadForTab(bindTabThread(bound, 42, ''), 42) === '', 'clearing a tab conversation does not leak the previous thread');
+  const notes = appendTranscript(appendTranscript([], 'user', 'hi'), 'assistant', 'hello');
+  ok(notes.length === 2 && notes[1].text === 'hello', 'tab transcripts keep user and assistant turns');
 }
 await drive().catch((e) => { console.error('drive error', e.message); failed++; });
 

@@ -7,7 +7,7 @@
 
 import { AGUIClient, abortActiveRun, leftoverAbortedResult } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
-import { readThreadId } from './thread.js';
+import { readThreadId, threadForTab, bindTabThread, appendTranscript } from './thread.js';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8965',
@@ -85,6 +85,14 @@ let currentThreadId = null;
 let lastSnapshot = null;
 let lastRuntime = null;
 let ownedTabId = null;
+let tabThreads = {};
+let transcripts = {};
+let followTimer = null;
+let pendingFollowTabId = null;
+let lastFollowKey = '';
+
+const TAB_THREADS_KEY = 'hermesTabThreads';
+const TRANSCRIPTS_KEY = 'hermesTranscripts';
 
 function isRestrictedUrl(url = '') {
   return /^(chrome|edge|brave|opera|about|devtools|chrome-extension|moz-extension):/i.test(String(url || ''));
@@ -125,21 +133,59 @@ async function getPageTab(preferredId, opts = {}) {
   return httpTabs.find((tab) => tab.active) || httpTabs[0] || null;
 }
 
-function persistThreadId(id) {
+function persistThreadId(id, tabId = ownedTabId) {
   const threadId = String(id || '').trim();
   if (!threadId) return;
   currentThreadId = threadId;
-  try { chrome.storage?.session?.set({ hermesThreadId: threadId }); } catch {}
+  if (tabId != null) tabThreads = bindTabThread(tabThreads, tabId, threadId);
+  try {
+    chrome.storage?.session?.set({
+      hermesThreadId: threadId,
+      [TAB_THREADS_KEY]: tabThreads,
+      [TRANSCRIPTS_KEY]: transcripts
+    });
+  } catch {}
+}
+
+function rememberTranscript(threadId, role, text) {
+  const id = String(threadId || currentThreadId || '').trim();
+  if (!id) return;
+  transcripts[id] = appendTranscript(transcripts[id], role, text);
+  try { chrome.storage?.session?.set({ [TRANSCRIPTS_KEY]: transcripts }); } catch {}
+}
+
+function transcriptFor(threadId) {
+  const id = String(threadId || '').trim();
+  return id && Array.isArray(transcripts[id]) ? transcripts[id] : [];
+}
+
+function clearThread(tabId = ownedTabId) {
+  const old = currentThreadId;
+  if (tabId != null) tabThreads = bindTabThread(tabThreads, tabId, '');
+  if (old) delete transcripts[old];
+  currentThreadId = threadForTab(tabThreads, tabId) || null;
+  try {
+    chrome.storage?.session?.set({
+      hermesThreadId: currentThreadId || '',
+      [TAB_THREADS_KEY]: tabThreads,
+      [TRANSCRIPTS_KEY]: transcripts
+    });
+  } catch {}
 }
 
 async function restoreThreadId() {
   try {
-    const stored = await chrome.storage?.session?.get(['hermesThreadId', 'hermesOwnedTabId']);
-    if (stored?.hermesThreadId) currentThreadId = String(stored.hermesThreadId);
+    const stored = await chrome.storage?.session?.get(['hermesThreadId', 'hermesOwnedTabId', TAB_THREADS_KEY, TRANSCRIPTS_KEY]);
+    if (stored?.[TAB_THREADS_KEY] && typeof stored[TAB_THREADS_KEY] === 'object') tabThreads = stored[TAB_THREADS_KEY];
+    if (stored?.[TRANSCRIPTS_KEY] && typeof stored[TRANSCRIPTS_KEY] === 'object') transcripts = stored[TRANSCRIPTS_KEY];
     if (stored?.hermesOwnedTabId != null) ownedTabId = Number(stored.hermesOwnedTabId);
+    const bound = threadForTab(tabThreads, ownedTabId);
+    currentThreadId = bound || String(stored?.hermesThreadId || '') || null;
   } catch {}
 }
-restoreThreadId();
+restoreThreadId().then(() => {
+  activeHttpTab().then((tab) => { if (tab?.id) scheduleFollow(tab.id, 'startup'); }).catch(() => {});
+}).catch(() => {});
 
 function bridgeHeaders(cfg) {
   return cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {};
@@ -636,7 +682,7 @@ async function chat(userText, opts = {}) {
   const shouldAttachPage = typeof opts.attachPage === 'boolean' ? opts.attachPage : cfg.attachPageContext !== false;
   if (shouldAttachPage) {
     let snapshot = null;
-    try { snapshot = await snapshotTab(opts.tabId); } catch (error) {
+    try { snapshot = await snapshotTab(opts.tabId || ownedTabId); } catch (error) {
       pushDiag({ level: 'error', source: 'attach', message: String(error) });
       emit('page-context-status', { ok: false, error: String(error) });
     }
@@ -690,7 +736,11 @@ async function chat(userText, opts = {}) {
     const result = await client.runAgent(input, { generation });
     if (result.state?.threadId) persistThreadId(result.state.threadId);
     else if (input.threadId) persistThreadId(input.threadId);
+    rememberTranscript(currentThreadId, 'user', userText);
+    const assistant = (result.messages || []).map((row) => row.text || '').filter(Boolean).join('\n').trim();
+    if (assistant) rememberTranscript(currentThreadId, 'assistant', assistant);
     if (!announceRunEnd(generation, { ok: true, result })) return { aborted: true };
+    if (pendingFollowTabId != null) scheduleFollow(pendingFollowTabId, 'after-run');
     return result;
   } catch (e) {
     const aborted = e?.name === 'AbortError' || /abort/i.test(String(e?.message || e));
@@ -703,9 +753,113 @@ async function chat(userText, opts = {}) {
   }
 }
 
-function clearThread() {
-  currentThreadId = null;
-  try { chrome.storage?.session?.remove('hermesThreadId'); } catch {}
+async function activeHttpTab() {
+  const queries = [
+    { active: true, lastFocusedWindow: true },
+    { active: true, currentWindow: true }
+  ];
+  for (const query of queries) {
+    const [tab] = await chrome.tabs.query(query).catch(() => []);
+    if (tab?.id != null && !isRestrictedUrl(tab.url)) return tab;
+  }
+  return null;
+}
+
+function emitPageBar(tab, extra = {}) {
+  emit('page-context-status', {
+    ok: !isRestrictedUrl(tab?.url),
+    url: tab?.url || '',
+    title: tab?.title || tab?.url || '',
+    tabId: tab?.id,
+    following: true,
+    ...extra
+  });
+}
+
+async function followActivePage(tabId, reason = 'switch') {
+  const cfg = await store.get().catch(() => DEFAULTS);
+  const tab = tabId != null
+    ? await chrome.tabs.get(tabId).catch(() => null)
+    : await activeHttpTab();
+  if (!tab?.id) return;
+
+  if (client?.busy) {
+    pendingFollowTabId = tab.id;
+    emitPageBar(tab, { deferred: true, error: undefined });
+    emit('thread-changed', {
+      threadId: threadForTab(tabThreads, tab.id) || '',
+      tabId: tab.id,
+      url: tab.url,
+      title: tab.title,
+      transcript: transcriptFor(threadForTab(tabThreads, tab.id)),
+      deferred: true
+    });
+    return;
+  }
+
+  pendingFollowTabId = null;
+  const followKey = `${tab.id}|${tab.url || ''}|${tab.title || ''}`;
+  if (followKey === lastFollowKey && reason === 'updated') return;
+  lastFollowKey = followKey;
+  const nextThread = threadForTab(tabThreads, tab.id);
+  const threadChanged = String(nextThread || '') !== String(currentThreadId || '') || Number(tab.id) !== Number(ownedTabId);
+  pinOwnedTab(tab);
+  currentThreadId = nextThread || null;
+  try { chrome.storage?.session?.set({ hermesThreadId: currentThreadId || '' }); } catch {}
+
+  emit('thread-changed', {
+    threadId: currentThreadId || '',
+    tabId: tab.id,
+    url: tab.url,
+    title: tab.title,
+    transcript: transcriptFor(currentThreadId),
+    reason
+  });
+
+  if (cfg.attachPageContext === false) {
+    emitPageBar(tab, { attached: false });
+    return;
+  }
+  if (isRestrictedUrl(tab.url)) {
+    lastSnapshot = null;
+    emitPageBar(tab, { ok: false, error: 'Restricted browser page' });
+    return;
+  }
+  try {
+    const snap = await snapshotTab(tab.id, { fresh: true });
+    if (snap) {
+      emitPageBar(tab, {
+        interactive: (snap.snapshot?.interactive || []).length,
+        words: snap.snapshot?.wordCount,
+        posts: Array.isArray(snap.snapshot?.feed) ? snap.snapshot.feed.length : 0,
+        thin: Boolean(snap.snapshot?.thin)
+      });
+    } else {
+      emitPageBar(tab, { ok: false, error: 'Could not read this page' });
+    }
+  } catch (error) {
+    emitPageBar(tab, { ok: false, error: String(error.message || error) });
+  }
+  if (threadChanged) {
+    pushDiag({
+      level: 'info',
+      source: 'follow',
+      message: nextThread ? 'Switched to this tab conversation' : 'Following a new page — new conversation for this tab',
+      extra: { tabId: tab.id, url: tab.url, reason }
+    });
+  }
+}
+
+function scheduleFollow(tabId, reason) {
+  pendingFollowTabId = tabId;
+  if (followTimer) clearTimeout(followTimer);
+  followTimer = setTimeout(() => {
+    followTimer = null;
+    const id = pendingFollowTabId;
+    followActivePage(id, reason).catch((error) => {
+      pushDiag({ level: 'warn', source: 'follow', message: String(error.message || error) });
+    });
+  }, reason === 'updated' ? 450 : 200);
 }
 
 async function loadRuntime() {
@@ -787,8 +941,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'clear-thread': {
-      clearThread();
-      sendResponse({ ok: true });
+      clearThread(msg.tabId || ownedTabId);
+      lastSnapshot = null;
+      followActivePage(msg.tabId || ownedTabId, 'new').catch(() => {});
+      sendResponse({ ok: true, threadId: currentThreadId || '' });
+      return true;
+    }
+    case 'get-transcript': {
+      sendResponse({ ok: true, threadId: msg.threadId || currentThreadId || '', transcript: transcriptFor(msg.threadId || currentThreadId) });
       return true;
     }
     case 'log-diag': {
@@ -828,6 +988,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         snapshot: lastSnapshot,
         ownedTabId,
         runtime: lastRuntime,
+        transcript: transcriptFor(currentThreadId),
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN
       });
@@ -843,10 +1004,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     case 'tab-changed': {
       const senderTabId = sender.tab?.id;
-      if (senderTabId == null || senderTabId === ownedTabId) {
-        lastSnapshot = null;
-        emit('tab-changed', { url: msg.url, title: msg.title, tabId: senderTabId });
-      }
+      if (senderTabId != null) scheduleFollow(senderTabId, 'page');
       sendResponse({ ok: true });
       return true;
     }
@@ -891,13 +1049,33 @@ relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.d
 relay.addEventListener('agent-state', (e) => relayToPorts('agent-state', e.detail));
 relay.addEventListener('runtime', (e) => relayToPorts('runtime', { runtime: e.detail }));
 relay.addEventListener('diag', (e) => relayToPorts('diag', e.detail));
+relay.addEventListener('thread-changed', (e) => relayToPorts('thread-changed', e.detail));
+relay.addEventListener('tab-changed', (e) => relayToPorts('tab-changed', e.detail));
 
 if (chrome.tabs?.onRemoved) {
   chrome.tabs.onRemoved.addListener((tabId) => {
+    tabThreads = bindTabThread(tabThreads, tabId, '');
+    try { chrome.storage?.session?.set({ [TAB_THREADS_KEY]: tabThreads }); } catch {}
     if (tabId === ownedTabId) {
       clearOwnedTab();
       lastSnapshot = null;
+      activeHttpTab().then((tab) => { if (tab?.id) scheduleFollow(tab.id, 'closed'); }).catch(() => {});
     }
+  });
+}
+
+if (chrome.tabs?.onActivated) {
+  chrome.tabs.onActivated.addListener((info) => {
+    if (info?.tabId != null) scheduleFollow(info.tabId, 'activated');
+  });
+}
+
+if (chrome.tabs?.onUpdated) {
+  chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+    if (change.status !== 'complete' && !change.url && !change.title) return;
+    const isOwned = Number(tabId) === Number(ownedTabId);
+    const isPending = Number(tabId) === Number(pendingFollowTabId);
+    if (isOwned || isPending || tab?.active) scheduleFollow(tabId, 'updated');
   });
 }
 

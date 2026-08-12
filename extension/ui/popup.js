@@ -32,6 +32,10 @@ function connect() {
       if (e.type === 'TOOL_CALL_START') appendMsg('tool', `🔧 ${e.name || e.toolName || 'tool'}`);
     } else if (m.kind === 'state') {
       setStatus(m.clientBusy ? 'busy' : 'ok', m.clientBusy ? 'running' : 'connected');
+    } else if (m.kind === 'page-snapshot' && m.snapshot) {
+      $('pageLabel').textContent = m.snapshot.title || m.snapshot.url || '—';
+    } else if (m.kind === 'page-context-status' && (m.title || m.url)) {
+      $('pageLabel').textContent = m.title || m.url;
     }
   });
   port.postMessage({ kind: 'hello' });

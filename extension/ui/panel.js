@@ -35,6 +35,43 @@ function addEl(cls, text) {
   return d;
 }
 
+function clearChatView() {
+  chatEl.innerHTML = '';
+  chatEl.appendChild(emptyEl);
+  emptyEl.style.display = '';
+  currentStream = null;
+  toolCards.clear();
+  pendingToolResults.clear();
+  pendingText = '';
+  if (textTimer) clearTimeout(textTimer);
+  textTimer = null;
+}
+
+function renderTranscript(entries) {
+  clearChatView();
+  if (!Array.isArray(entries) || !entries.length) return;
+  for (const entry of entries) {
+    const text = String(entry?.text || '');
+    if (!text) continue;
+    if (entry.role === 'user') addEl('user', text);
+    else {
+      const stream = openAssistant();
+      stream.text = text;
+      if (stream.caret.parentNode) stream.caret.remove();
+      stream.el.classList.remove('streaming');
+      renderRichText(stream.body, text);
+      addMessageActions(stream);
+      currentStream = null;
+    }
+  }
+}
+
+function applyPageTitle(title, url) {
+  if (!title && !url) return;
+  $('pageTitle').textContent = title || url;
+  $('pageTitle').title = url || title || '';
+}
+
 // ---------------------------------------------------------------------------
 // Safe lightweight response rendering
 // ---------------------------------------------------------------------------
@@ -590,15 +627,20 @@ function connectPort() {
         }
       }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
-      updatePageBar();
+      applyPageTitle(m.snapshot.title || m.snapshot.snapshot?.title, m.snapshot.url);
+    } else if (m.kind === 'thread-changed') {
+      applyPageTitle(m.title, m.url);
+      const next = String(m.threadId || '');
+      if (next !== String(threadId || '')) {
+        threadId = next;
+        if (!busy) renderTranscript(m.transcript || []);
+      }
     } else if (m.kind === 'page-context-status') {
+      applyPageTitle(m.title, m.url);
       if (m.ok) {
-        if (m.thin) runLabel(`Weak page read · ${m.words || 0} words${m.posts ? ` · ${m.posts} posts` : ''}`);
-        else runLabel(`Pinned to this tab · ${m.interactive || 0} controls${m.posts ? ` · ${m.posts} posts` : ''}`);
-        if (m.title || m.url) {
-          $('pageTitle').textContent = m.title || m.url;
-          $('pageTitle').title = m.url || '';
-        }
+        if (m.deferred) runLabel('Will attach this page after the current reply');
+        else if (m.thin) runLabel(`This page · ${m.words || 0} words${m.posts ? ` · ${m.posts} posts` : ''}`);
+        else runLabel(`This page · ${m.interactive || 0} controls${m.posts ? ` · ${m.posts} posts` : ''}`);
       } else runLabel(m.error || 'Page context unavailable');
     } else if (m.kind === 'bridge-status') {
       bridgeConnected = Boolean(m.connected);
@@ -625,12 +667,13 @@ async function updatePageBar() {
     bridgeConnected = Boolean(r.bridgeConnected);
     if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
     if (r.runtime) renderRuntime(r.runtime);
-    if (r.threadId) threadId = r.threadId;
+    const nextThread = String(r.threadId || '');
+    if (nextThread !== String(threadId || '')) {
+      threadId = nextThread;
+      if (!busy) renderTranscript(r.transcript || []);
+    }
   }
-  if (snap) {
-    $('pageTitle').textContent = snap.snapshot?.title || snap.title || snap.url || '—';
-    $('pageTitle').title = snap.url || '';
-  }
+  if (snap) applyPageTitle(snap.snapshot?.title || snap.title, snap.url);
 }
 
 async function snapshotNow() {
@@ -790,19 +833,11 @@ function autoGrow() {
 
 $('btnSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('btnClear').addEventListener('click', async () => {
-  chatEl.innerHTML = '';
-  chatEl.appendChild(emptyEl);
-  emptyEl.style.display = '';
-  currentStream = null;
-  toolCards.clear();
-  pendingToolResults.clear();
-  pendingText = '';
-  if (textTimer) clearTimeout(textTimer);
-  textTimer = null;
+  clearChatView();
   threadId = '';
   await chrome.runtime.sendMessage({ kind: 'clear-thread' });
-  runLabel('new session');
-  setTimeout(() => runLabel(''), 900);
+  runLabel('new conversation on this page');
+  setTimeout(() => { if (!busy) runLabel(''); }, 900);
 });
 $('btnSnapshot').addEventListener('click', snapshotNow);
 $('refreshRuntime').addEventListener('click', (event) => {
