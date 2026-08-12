@@ -96,6 +96,8 @@ button.mini { padding: 3px 9px; font-size: 11px; }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 #prompt { resize: none; flex: 1; min-height: 38px; max-height: 140px; line-height: 1.4; font-size: 13px; }
 #send { padding: 9px 16px; }
+button.stop { padding: 9px 16px; background: var(--red); border: none; color: #fff; font-weight: 650; }
+button.stop:hover { filter: brightness(1.08); background: var(--red); }
 .attachbar { display: flex; align-items: center; gap: 10px; margin-top: 6px; min-height: 17px; }
 .attachbar .check { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
 .spacer { flex: 1; }

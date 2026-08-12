@@ -26,6 +26,7 @@
     .row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 88%, transparent); }
     #prompt { flex: 1; }
     #send { padding: 8px 14px; }
+    button.stop { padding: 8px 14px; background: var(--red); border: none; color: #fff; }
     .grow { flex: 1; }
   </style>
 </head>
@@ -42,6 +43,7 @@
   <div class="row">
     <input type="text" id="prompt" placeholder="Ask Hermes about this page…" />
     <button id="send" class="primary">Send</button>
+    <button id="btnStop" class="stop" type="button" hidden>Stop</button>
   </div>
   <script src="theme.js"></script>
   <script src="popup.js"></script>

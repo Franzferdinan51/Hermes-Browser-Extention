@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Unit tests for the Hermes browser extension page reader/actor logic (using a DOM fixture).",
   "scripts": {
-    "test": "node unit/page-test.mjs"
+    "test": "node unit/page-test.mjs && node unit/abort-test.mjs"
   },
   "dependencies": {
     "jsdom": "^24.0.0"

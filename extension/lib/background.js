@@ -506,7 +506,9 @@ async function chat(userText, opts = {}) {
     emit('run-end', { ok: true, result });
     return result;
   } catch (e) {
-    emit('run-end', { ok: false, error: String(e) });
+    const aborted = e?.name === 'AbortError' || /abort/i.test(String(e?.message || e));
+    emit('run-end', { ok: false, aborted, error: aborted ? 'stopped' : String(e) });
+    if (aborted) return { aborted: true };
     throw e;
   }
 }
@@ -541,7 +543,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg?.kind) return;
   switch (msg.kind) {
     case 'chat': {
-      chat(msg.text, msg).then((r) => sendResponse({ ok: true, r })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+      chat(msg.text, msg).then((r) => sendResponse({ ok: true, aborted: !!r?.aborted, r })).catch((e) => {
+        const aborted = e?.name === 'AbortError' || /abort/i.test(String(e));
+        sendResponse({ ok: false, aborted, error: aborted ? 'stopped' : String(e) });
+      });
+      return true;
+    }
+    case 'abort-run': {
+      const aborted = Boolean(client?.abortRun?.());
+      if (aborted) emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+      sendResponse({ ok: true, aborted });
       return true;
     }
     case 'read-page': {

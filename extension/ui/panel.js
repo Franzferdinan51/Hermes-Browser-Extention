@@ -469,9 +469,7 @@ function handleEvent(e) {
   const t = e.type;
   switch (t) {
     case 'RUN_STARTED':
-      busy = true;
-      setStatus('busy');
-      runLabel('Thinking…');
+      setComposerBusy(true, 'Thinking…');
       threadId = readThreadId(e) || threadId;
       break;
     case 'TEXT_MESSAGE_START':
@@ -513,23 +511,39 @@ function handleEvent(e) {
       flushText();
       finalizeStream();
       finalizeOpenTools(true);
-      busy = false;
-      setStatus(bridgeConnected ? 'ok' : 'err');
-      runLabel('done');
+      setComposerBusy(false, 'done');
       setTimeout(() => { if (!busy) runLabel(''); }, 1400);
       break;
     case 'RUN_ERROR':
       flushText();
       finalizeStream();
       finalizeOpenTools(false, e.error || e.message);
-      busy = false;
+      setComposerBusy(false, 'error');
       showError(e.error || e.message || 'unknown');
-      setStatus('err');
-      runLabel('error');
       break;
     default:
       break;
   }
+}
+
+function setComposerBusy(on, label) {
+  busy = !!on;
+  const sendBtn = $('send');
+  const stopBtn = $('btnStop');
+  if (sendBtn) sendBtn.hidden = busy;
+  if (stopBtn) stopBtn.hidden = !busy;
+  setStatus(busy ? 'busy' : (bridgeConnected ? 'ok' : 'err'));
+  if (label !== undefined) runLabel(label);
+}
+
+async function stopRun() {
+  if (!busy) return;
+  runLabel('Stopping…');
+  const response = await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
+  flushText();
+  finalizeStream();
+  finalizeOpenTools(false, 'stopped');
+  setComposerBusy(false, response?.aborted || response?.ok ? 'stopped' : 'idle');
 }
 
 function setStatus(state) {
@@ -552,9 +566,16 @@ function connectPort() {
       if (m.runtime) renderRuntime(m.runtime);
       if (m.threadId) threadId = m.threadId;
     } else if (m.kind === 'run-start') {
-      busy = true;
+      setComposerBusy(true, 'Thinking…');
     } else if (m.kind === 'run-end') {
-      busy = false;
+      if (m.aborted) {
+        flushText();
+        finalizeStream();
+        finalizeOpenTools(false, 'stopped');
+        setComposerBusy(false, 'stopped');
+      } else {
+        setComposerBusy(false, m.ok === false ? 'error' : 'done');
+      }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
       updatePageBar();
     } else if (m.kind === 'page-context-status') {
@@ -703,27 +724,33 @@ async function send() {
   $('prompt').value = '';
   autoGrow();
   emptyEl.style.display = 'none';
-  busy = true;
+  setComposerBusy(true, 'Thinking…');
   addEl('user', text);
-  setStatus('busy');
-  runLabel('Thinking…');
   try {
     const response = await chrome.runtime.sendMessage(buildChatRequest(text, { threadId }, {
       attachPage: $('autoSnap').checked,
       model: selectedModelId || config?.model || '',
       modelProvider: selectedProvider || config?.modelProvider || ''
     }));
+    if (response?.aborted) {
+      setComposerBusy(false, 'stopped');
+      return;
+    }
     if (response && !response.ok) throw new Error(response.error || 'Chat request failed');
   } catch (e) {
+    if (/abort/i.test(String(e?.message || e))) {
+      setComposerBusy(false, 'stopped');
+      return;
+    }
     showError(e);
-    setStatus('err');
-    runLabel('error');
+    setComposerBusy(false, 'error');
   } finally {
-    busy = false;
+    if (busy) setComposerBusy(false);
   }
 }
 
 $('send').addEventListener('click', send);
+$('btnStop').addEventListener('click', stopRun);
 $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();

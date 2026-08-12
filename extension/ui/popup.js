@@ -48,8 +48,17 @@ async function send() {
   $('prompt').value = '';
   appendMsg('user', text);
   busy = true;
+  $('send').hidden = true;
+  $('btnStop').hidden = false;
   setStatus('busy', 'running…');
   const r = await chrome.runtime.sendMessage({ kind: 'chat', text }).catch((e) => ({ ok: false, error: String(e) }));
+  $('send').hidden = false;
+  $('btnStop').hidden = true;
+  if (r?.aborted) {
+    setStatus('ok', 'stopped');
+    busy = false;
+    return;
+  }
   if (r && r.ok) {
     // Reconstruct assistant reply from result.messages
     const msgs = (r.r && r.r.messages) || [];
@@ -63,6 +72,13 @@ async function send() {
   busy = false;
 }
 
+$('btnStop').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
+  busy = false;
+  $('send').hidden = false;
+  $('btnStop').hidden = true;
+  setStatus('ok', 'stopped');
+});
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 $('clear').addEventListener('click', async () => { logEl.innerHTML = ''; await chrome.runtime.sendMessage({ kind: 'clear-thread' }); });

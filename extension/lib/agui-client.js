@@ -158,7 +158,11 @@ export class AGUIClient extends Emitter {
     }
   }
 
-  abortRun() { if (this.abort) this.abort.abort(); }
+  abortRun() {
+    if (!this.abort) return false;
+    this.abort.abort();
+    return true;
+  }
 
   /**
    * Incremental SSE decoder. Handles both the standard `data:`/`event:` lines
