@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../../extension/lib/thread.js';
+import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, livePageState, visibleError, connectionState } from '../../extension/lib/thread.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.join(__dirname, '..', '..', 'extension');
@@ -273,7 +273,20 @@ async function drive() {
   const followed = pageIdentity({ title: 'Google News', url: 'https://news.google.com' });
   ok(followed.label === 'Google News' && !followed.empty, 'page identity from a thread-change event is not a stale dash');
   ok(pageIdentity({}).empty && pageIdentityFallback().includes('snapshot'), 'empty page identity tells the user to open a page or snapshot');
-  ok(pageIdentity({ ok: false, error: 'Restricted browser page', title: 'chrome://extensions' }).label.includes('cannot attach'), 'restricted pages explain that they cannot be attached');
+  ok(pageIdentity({ kind: 'page-context-status', ok: false, error: 'Restricted browser page', url: 'chrome://extensions', title: 'Extensions' }).label.includes('cannot attach'), 'restricted pages explain that they cannot be attached');
+  const attachFail = pageIdentity({
+    kind: 'page-context-status',
+    ok: false,
+    error: 'Could not read the active page. It may be a restricted browser page.'
+  });
+  ok(!attachFail.restricted && attachFail.clobber === false, 'title-less attach fail is not treated as a restricted page');
+  ok(!shouldApplyPageIdentity(attachFail), 'title-less attach fail does not clobber a known page identity');
+  const hydrated = livePageState({
+    lastSnapshot: { tabId: 1, title: 'Old News', url: 'https://news.example' },
+    lastPage: { tabId: 2, title: 'Extensions', url: 'chrome://extensions', ok: false, error: 'Restricted browser page' }
+  });
+  ok(hydrated.tabId === 2 && String(hydrated.url).startsWith('chrome:'), 'live page prefers the followed tab over a snapshot from another tab');
+  ok(pageIdentity({ ok: true, page: hydrated }).restricted, 'get-state envelope ok:true still shows restricted guidance for chrome://');
   ok(visibleError('') !== 'unknown' && visibleError('unknown').includes('bridge'), 'chat errors stay actionable instead of unknown');
   ok(connectionState({ clientBusy: true }).kind === 'busy' && connectionState({ bridgeConnected: true }).kind === 'ok' && connectionState({}).kind === 'err', 'connection state covers busy, connected, and unavailable');
 }

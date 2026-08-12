@@ -7,7 +7,7 @@
 
 import { AGUIClient, abortActiveRun, leftoverAbortedResult } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
-import { readThreadId, threadForTab, bindTabThread, appendTranscript, isolateTabConversation } from './thread.js';
+import { readThreadId, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, isRestrictedUrl, livePageState } from './thread.js';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8965',
@@ -94,10 +94,6 @@ let lastPage = null;
 
 const TAB_THREADS_KEY = 'hermesTabThreads';
 const TRANSCRIPTS_KEY = 'hermesTranscripts';
-
-function isRestrictedUrl(url = '') {
-  return /^(chrome|edge|brave|opera|about|devtools|chrome-extension|moz-extension):/i.test(String(url || ''));
-}
 
 function pinOwnedTab(tab) {
   if (tab?.id == null) return;
@@ -999,9 +995,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         threadId: currentThreadId,
         snapshot: lastSnapshot,
-        page: lastSnapshot
-          ? { title: lastSnapshot.title || '', url: lastSnapshot.url || '', tabId: lastSnapshot.tabId }
-          : lastPage,
+        page: livePageState({ lastPage, lastSnapshot }),
         ownedTabId,
         runtime: lastRuntime,
         transcript: transcriptFor(currentThreadId),
@@ -1044,9 +1038,7 @@ chrome.runtime.onConnect.addListener((port) => {
         kind: 'state',
         threadId: currentThreadId,
         runtime: lastRuntime,
-        page: lastSnapshot
-          ? { title: lastSnapshot.title || '', url: lastSnapshot.url || '', tabId: lastSnapshot.tabId }
-          : lastPage,
+        page: livePageState({ lastPage, lastSnapshot }),
         snapshot: lastSnapshot,
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN

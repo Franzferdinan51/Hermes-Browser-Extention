@@ -1,7 +1,7 @@
 // popup.js — compact chat popup. Streams AG-UI events via the runtime port and
 // renders simple assistant/user/tool bubbles. Keeps the SW alive while open.
 import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
-import { pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../lib/thread.js';
+import { pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, visibleError, connectionState } from '../lib/thread.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -22,6 +22,7 @@ function appendMsg(cls, text) {
 
 function showPage(source) {
   const id = pageIdentity(source || {});
+  if (!shouldApplyPageIdentity(id)) return;
   $('pageLabel').textContent = id.empty ? pageIdentityFallback() : id.label;
   $('pageLabel').title = id.url || id.label;
 }

@@ -1,6 +1,6 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
-import { readThreadId, buildChatRequest, pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../lib/thread.js';
+import { readThreadId, buildChatRequest, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, visibleError, connectionState } from '../lib/thread.js';
 import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +68,7 @@ function renderTranscript(entries) {
 
 function showPage(source) {
   const id = pageIdentity(source || {});
+  if (!shouldApplyPageIdentity(id)) return;
   $('pageTitle').textContent = id.empty ? pageIdentityFallback() : id.label;
   $('pageTitle').title = id.url || id.label;
 }

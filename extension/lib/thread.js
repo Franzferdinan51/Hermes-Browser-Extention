@@ -66,6 +66,17 @@ export function pageIdentityFallback() {
   return 'No page yet — open a normal http(s) tab or press snapshot.';
 }
 
+export function isRestrictedUrl(url = '') {
+  return /^(chrome|edge|brave|opera|about|devtools|chrome-extension|moz-extension):/i.test(String(url || ''));
+}
+
+function pageFailFlag(source = {}, page, url) {
+  if (page && Object.prototype.hasOwnProperty.call(page, 'ok')) return page.ok === false;
+  if (source.kind === 'page-context-status' || source.following === true) return source.ok === false;
+  if (isRestrictedUrl(url)) return true;
+  return false;
+}
+
 /** Derive the page bar label from get-state, snapshot, or follow events. */
 export function pageIdentity(source = {}) {
   const snap = source.snapshot && typeof source.snapshot === 'object' ? source.snapshot : null;
@@ -73,8 +84,10 @@ export function pageIdentity(source = {}) {
   const page = source.page && typeof source.page === 'object' ? source.page : null;
   const title = String(source.title || page?.title || snap?.title || nested?.title || '').trim();
   const url = String(source.url || page?.url || snap?.url || '').trim();
-  const error = String(source.error || '').trim();
-  const restricted = source.ok === false && /restrict/i.test(error);
+  const error = String(source.error || page?.error || '').trim();
+  const failed = pageFailFlag(source, page, url);
+  const restricted = isRestrictedUrl(url);
+
   if (restricted) {
     const where = title || url || 'Restricted page';
     return {
@@ -82,14 +95,54 @@ export function pageIdentity(source = {}) {
       url,
       label: `${where} — cannot attach. Open a normal http(s) page.`,
       restricted: true,
-      empty: false
+      empty: false,
+      clobber: true
     };
   }
-  if (source.ok === false && error && !title && !url) {
-    return { title: '', url: '', label: error, restricted: false, empty: false };
+  if (failed && !title && !url) {
+    return { title: '', url: '', label: '', restricted: false, empty: true, clobber: false, error };
   }
-  if (title || url) return { title, url, label: title || url, restricted: false, empty: false };
-  return { title: '', url: '', label: '', restricted: false, empty: true };
+  if (title || url) return { title, url, label: title || url, restricted: false, empty: false, clobber: true };
+  return { title: '', url: '', label: '', restricted: false, empty: true, clobber: false };
+}
+
+/** Skip title-less attach failures so they cannot wipe a known page bar. */
+export function shouldApplyPageIdentity(id) {
+  return Boolean(id && id.clobber !== false);
+}
+
+/** Prefer the followed tab over a snapshot from a different tab. */
+export function livePageState({ lastPage, lastSnapshot } = {}) {
+  const follow = lastPage && typeof lastPage === 'object' ? lastPage : null;
+  const snap = lastSnapshot && typeof lastSnapshot === 'object' ? lastSnapshot : null;
+  if (follow && snap && follow.tabId != null && snap.tabId != null && Number(follow.tabId) !== Number(snap.tabId)) {
+    return {
+      title: follow.title || '',
+      url: follow.url || '',
+      tabId: follow.tabId,
+      ok: follow.ok,
+      error: follow.error || ''
+    };
+  }
+  if (follow) {
+    return {
+      title: follow.title || snap?.title || '',
+      url: follow.url || snap?.url || '',
+      tabId: follow.tabId ?? snap?.tabId,
+      ok: follow.ok,
+      error: follow.error || ''
+    };
+  }
+  if (snap) {
+    return {
+      title: snap.title || '',
+      url: snap.url || '',
+      tabId: snap.tabId,
+      ok: true,
+      error: ''
+    };
+  }
+  return null;
 }
 
 export function visibleError(error) {
