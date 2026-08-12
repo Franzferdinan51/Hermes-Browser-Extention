@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { readThreadId, buildChatRequest } from '../../extension/lib/thread.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.join(__dirname, '..', '..', 'extension');
@@ -183,6 +184,8 @@ async function drive() {
   ok(evalRes.ok && String(evalRes.value).includes('Test Page'), 'actor evaluates read-only page expression');
   const evalWrite = await actor.runAction({ name: 'evaluate', params: { expression: 'document.title = "nope"' } });
   ok(!evalWrite.ok, 'actor rejects write evaluate expressions');
+  const evalNav = await actor.runAction({ name: 'evaluate', params: { expression: "location.assign('https://evil.example')" } });
+  ok(!evalNav.ok, 'actor rejects evaluate expressions that navigate');
   const badNav = await actor.runAction({ name: 'navigate', params: { url: 'javascript:alert(1)' } });
   ok(!badNav.ok, 'actor rejects non-http(s) navigation');
   const diffRes = await actor.runAction({ name: 'diff', params: { baseline: 'stale-baseline' } });
@@ -217,6 +220,13 @@ async function drive() {
     { name: 'read', params: { selector: 'h1' } }
   ]);
   ok(Array.isArray(batch) && batch.length === 2 && batch.every((r) => r.ok), 'runActions executes a batch');
+
+  const started = readThreadId({ type: 'RUN_STARTED', threadId: 'thread_live' });
+  ok(started === 'thread_live', 'readThreadId extracts RUN_STARTED thread');
+  const ignored = readThreadId({ type: 'RUN_FINISHED', threadId: 'thread_live' });
+  ok(ignored === '', 'readThreadId ignores non-start events');
+  const payload = buildChatRequest('follow up', { threadId: 'thread_live' }, { attachPage: true });
+  ok(payload.kind === 'chat' && payload.threadId === 'thread_live' && payload.text === 'follow up', 'buildChatRequest keeps the live thread on the next chat');
 }
 await drive().catch((e) => { console.error('drive error', e.message); failed++; });
 

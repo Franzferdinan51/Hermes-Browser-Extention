@@ -47,6 +47,7 @@ jobs:
           node --check extension/lib/agui-client.js
           node --check extension/lib/background.js
           node --check extension/lib/browser-chrome.js
+          node --check extension/lib/thread.js
           node --check extension/lib/content.js
           node --check extension/lib/page-actor.js
           node --check extension/lib/page-reader.js

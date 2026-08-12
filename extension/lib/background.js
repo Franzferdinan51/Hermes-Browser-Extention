@@ -7,6 +7,7 @@
 
 import { AGUIClient } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
+import { readThreadId } from './thread.js';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8965',
@@ -35,6 +36,21 @@ let client = null;
 let currentThreadId = null;
 let lastSnapshot = null;
 let lastRuntime = null;
+
+function persistThreadId(id) {
+  const threadId = String(id || '').trim();
+  if (!threadId) return;
+  currentThreadId = threadId;
+  try { chrome.storage?.session?.set({ hermesThreadId: threadId }); } catch {}
+}
+
+async function restoreThreadId() {
+  try {
+    const stored = await chrome.storage?.session?.get('hermesThreadId');
+    if (stored?.hermesThreadId) currentThreadId = String(stored.hermesThreadId);
+  } catch {}
+}
+restoreThreadId();
 
 function bridgeHeaders(cfg) {
   return cfg.authToken ? { Authorization: `Bearer ${cfg.authToken}` } : {};
@@ -70,7 +86,8 @@ async function buildClient() {
 async function handleEvent(evt) {
   try {
     if (evt.type === 'RUN_STARTED') {
-      if (evt.threadId) currentThreadId = evt.threadId;
+      const threadId = readThreadId(evt);
+      if (threadId) persistThreadId(threadId);
       emit('agent-state', { phase: 'running' });
     } else if (evt.type === 'RUN_FINISHED') emit('agent-state', { phase: 'done' });
     else if (evt.type === 'RUN_ERROR') emit('agent-state', { phase: 'error' });
@@ -442,7 +459,7 @@ async function chat(userText, opts = {}) {
   try {
     const input = {
       agentId: 'hermes',
-      threadId: currentThreadId || undefined,
+      threadId: opts.threadId || currentThreadId || undefined,
       messages: [
         ...(opts.history || []),
         { role: 'user', content: userText }
@@ -450,8 +467,8 @@ async function chat(userText, opts = {}) {
       ...extra
     };
     const result = await client.runAgent(input);
-    if (result.state?.threadId) currentThreadId = result.state.threadId;
-    else if (!currentThreadId && input.threadId) currentThreadId = input.threadId;
+    if (result.state?.threadId) persistThreadId(result.state.threadId);
+    else if (input.threadId) persistThreadId(input.threadId);
     emit('run-end', { ok: true, result });
     return result;
   } catch (e) {
@@ -462,6 +479,7 @@ async function chat(userText, opts = {}) {
 
 function clearThread() {
   currentThreadId = null;
+  try { chrome.storage?.session?.remove('hermesThreadId'); } catch {}
 }
 
 async function loadRuntime() {

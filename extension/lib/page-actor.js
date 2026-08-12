@@ -558,10 +558,16 @@ function actionDiff(p = {}) {
 }
 
 /** BrowserOS evaluate: run a small read-only JS expression and return its JSON-safe result. */
+function isMutatingEvaluate(expr) {
+  if (/\b(eval|Function|import|require)\b/.test(expr)) return true;
+  if (/(?:^|[^=!<>])=(?!=)/.test(expr)) return true;
+  return /\b(assign|replace|reload|write|writeln|click|submit|remove|append|prepend|after|before|replaceWith|replaceChildren|setAttribute|removeAttribute|setItem|removeItem|open|close|focus|blur|select|dispatchEvent|insertAdjacentHTML|insertAdjacentElement|insertBefore|appendChild|removeChild|replaceChild)\s*\(/.test(expr);
+}
+
 function actionEvaluate(p = {}) {
   const expr = String(p.expression || p.script || p.js || '').trim();
   if (!expr) return { ok: false, error: 'evaluate requires expression' };
-  if (/\b(eval|Function|import|require)\b/.test(expr) || /(?:^|[^=!<>])=(?!=)/.test(expr)) {
+  if (isMutatingEvaluate(expr)) {
     return { ok: false, error: 'evaluate only allows read-only expressions' };
   }
   try {

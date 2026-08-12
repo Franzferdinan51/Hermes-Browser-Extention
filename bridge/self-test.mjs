@@ -50,6 +50,19 @@ const fake = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.includes('/api/chat/stream')) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const prompt = String(lastChatStartPayload?.message || '');
+    if (prompt.includes('NAV_SAFETY_PROBE')) {
+      emit('tool_call', { tool_call_id: 'tnav', name: 'browser_navigate', args: { url: 'javascript:alert(1)' } });
+      emit('done', {});
+      res.end();
+      return;
+    }
+    if (prompt.includes('MOVE_PAGE_PROBE')) {
+      emit('tool_call', { tool_call_id: 'tmove', name: 'move_page', args: { tabId: 7, index: 2 } });
+      emit('done', {});
+      res.end();
+      return;
+    }
     emit('context_status', { used_tokens: 1000, max_tokens: 8000 });
     emit('metering', { input_tokens: 50, output_tokens: 10, total_tokens: 60 });
     emit('token', { text: 'Hello ' });
@@ -272,6 +285,23 @@ async function main() {
   ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console(') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
   ok(firstChatPrompt.includes('browser_check(@eN)') && firstChatPrompt.includes('browser_evaluate(expression)') && firstChatPrompt.includes('browser_tabs(action='), 'prompt advertises expanded BrowserOS-parity tools');
   ok(firstChatPrompt.includes('browser_bookmarks(') && firstChatPrompt.includes('browser_page_content(') && firstChatPrompt.includes('browser_cookies('), 'prompt advertises catalog-inspired chrome tools');
+
+  const beforeSafety = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'NAV_SAFETY_PROBE' }] })
+  })).text();
+  const navDispatched = companionActions.slice(beforeSafety).some((msg) => String(msg.action?.params?.url || '').startsWith('javascript:'));
+  ok(!navDispatched, 'javascript: navigate is not dispatched to the companion');
+
+  const beforeMove = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'MOVE_PAGE_PROBE' }] })
+  })).text();
+  ok(companionActions.slice(beforeMove).some((msg) => msg.action?.name === 'tabs' && msg.action?.params?.action === 'move' && msg.action?.params?.tabId === 7), 'catalog alias move_page is mirrored as tabs move');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();

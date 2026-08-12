@@ -1,5 +1,7 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
+import { readThreadId, buildChatRequest } from '../lib/thread.js';
+
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
 const emptyEl = $('empty');
@@ -13,6 +15,7 @@ let selectedProvider = '';
 let bridgeConnected = false;
 let currentStream = null;
 let runtimeData = null;
+let threadId = '';
 const toolCards = new Map();
 const pendingToolResults = new Map();
 
@@ -451,6 +454,7 @@ function handleEvent(e) {
       busy = true;
       setStatus('busy');
       runLabel('Thinking…');
+      threadId = readThreadId(e) || threadId;
       break;
     case 'TEXT_MESSAGE_START':
       if (!currentStream) currentStream = openAssistant();
@@ -528,6 +532,7 @@ function connectPort() {
       bridgeConnected = Boolean(m.bridgeConnected);
       setStatus(m.clientBusy ? 'busy' : bridgeConnected ? 'ok' : 'err');
       if (m.runtime) renderRuntime(m.runtime);
+      if (m.threadId) threadId = m.threadId;
     } else if (m.kind === 'run-start') {
       busy = true;
     } else if (m.kind === 'run-end') {
@@ -562,6 +567,7 @@ async function updatePageBar() {
     bridgeConnected = Boolean(r.bridgeConnected);
     if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
     if (r.runtime) renderRuntime(r.runtime);
+    if (r.threadId) threadId = r.threadId;
   }
   if (snap) {
     $('pageTitle').textContent = snap.snapshot?.title || snap.title || snap.url || '—';
@@ -679,13 +685,11 @@ async function send() {
   setStatus('busy');
   runLabel('Thinking…');
   try {
-    const response = await chrome.runtime.sendMessage({
-      kind: 'chat',
-      text,
+    const response = await chrome.runtime.sendMessage(buildChatRequest(text, { threadId }, {
       attachPage: $('autoSnap').checked,
       model: selectedModelId || config?.model || '',
       modelProvider: selectedProvider || config?.modelProvider || ''
-    });
+    }));
     if (response && !response.ok) throw new Error(response.error || 'Chat request failed');
   } catch (e) {
     showError(e);
@@ -721,6 +725,7 @@ $('btnClear').addEventListener('click', async () => {
   pendingText = '';
   if (textTimer) clearTimeout(textTimer);
   textTimer = null;
+  threadId = '';
   await chrome.runtime.sendMessage({ kind: 'clear-thread' });
   runLabel('new session');
   setTimeout(() => runLabel(''), 900);

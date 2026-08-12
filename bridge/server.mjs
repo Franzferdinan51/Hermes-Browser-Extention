@@ -196,6 +196,14 @@ function resolveToolResult(payload = {}) {
   return true;
 }
 
+function isSafeNavUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (/^[a-zA-Z][a-zA-Z+\-.]*:/.test(raw)) return /^https?:\/\//i.test(raw);
+  if (raw.startsWith('//')) return false;
+  return true;
+}
+
 function actionReadyToMirror(action) {
   if (!action?.name) return false;
   const params = action.params || {};
@@ -203,7 +211,15 @@ function actionReadyToMirror(action) {
     'click', 'set_value', 'type_into', 'check', 'uncheck', 'clear', 'hover',
     'focus', 'select_option', 'read', 'fill_many', 'drag'
   ]);
-  if (action.name === 'navigate') return Boolean(params.url);
+  if (action.name === 'navigate') return isSafeNavUrl(params.url);
+  if (action.name === 'tabs') {
+    const verb = String(params.action || 'list').toLowerCase();
+    if (/^(create|new|open|new_page)$/.test(verb) && params.url) return isSafeNavUrl(params.url);
+  }
+  if (action.name === 'windows') {
+    const verb = String(params.action || 'list').toLowerCase();
+    if (/^(create|new)$/.test(verb) && params.url) return isSafeNavUrl(params.url);
+  }
   if (action.name === 'key') return Boolean(params.keys);
   if (action.name === 'grep') return Boolean(params.pattern);
   if (action.name === 'evaluate') return Boolean(params.expression);
@@ -306,7 +322,8 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_new_page',
   'browser_close_page',
   'browser_switch_tab',
-  'browser_active_tab'
+  'browser_active_tab',
+  'browser_move_page'
 ]);
 
 // Public BrowserOS MCP catalog names → companion actions. Ideas only, no source.
@@ -317,7 +334,7 @@ const TOOL_ALIASES = {
   list_pages: 'browser_tabs',
   show_page: 'browser_switch_tab',
   get_active_page: 'browser_active_tab',
-  move_page: 'browser_tabs',
+  move_page: 'browser_move_page',
   take_snapshot: 'browser_snapshot',
   take_enhanced_snapshot: 'browser_snapshot',
   get_page_content: 'browser_page_content',
@@ -430,6 +447,8 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'tabs', params: { action: 'switch', ...args } };
     case 'browser_active_tab':
       return { name: 'tabs', params: { action: 'get_active', ...args } };
+    case 'browser_move_page':
+      return { name: 'tabs', params: { action: 'move', ...args } };
     case 'browser_windows':
       return { name: 'windows', params: args.action ? args : { action: inferWindowAction(raw, args), ...args } };
     case 'browser_tab_groups':
