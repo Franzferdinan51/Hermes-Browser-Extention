@@ -222,7 +222,7 @@ Bridge test:
 cd bridge
 npm ci
 npm test
-# expected contract: 33 passed, 0 failed
+# expected contract: 35 passed, 0 failed
 ```
 
 The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.

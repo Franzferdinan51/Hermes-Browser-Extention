@@ -366,7 +366,9 @@ function renderRuntime(runtime) {
     ? Number(summary.tools)
     : enabledToolsets.reduce((sum, row) => sum + (Array.isArray(row?.tools) ? row.tools.length : 0), 0);
 
-  $('runtimeSummary').textContent = `${enabledToolsets.length} sets · ${toolCount} tools · ${enabledSkills.length} skills`;
+  const companionTools = Number(summary.companionTools);
+  const companionNote = Number.isFinite(companionTools) && companionTools > 0 ? ` · ${companionTools} companion` : '';
+  $('runtimeSummary').textContent = `${enabledToolsets.length} sets · ${toolCount} tools${companionNote} · ${enabledSkills.length} skills`;
   $('runtimeSkillCount').textContent = enabledSkills.length ? `${enabledSkills.length} enabled` : 'none';
 
   const toolsetRoot = $('runtimeToolsets');

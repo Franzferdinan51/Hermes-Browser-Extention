@@ -380,6 +380,59 @@ function isBrowserCompanionTool(name = '') {
   return n === 'browser_act' || MIRRORABLE_BROWSER_TOOLS.has(n);
 }
 
+function companionToolNames() {
+  return [...MIRRORABLE_BROWSER_TOOLS].sort();
+}
+
+/** Merge the active-tab companion catalog into Hermes runtime metadata. */
+function withCompanionCatalog(runtime = {}) {
+  const companion = companionToolNames();
+  const toolsets = Array.isArray(runtime.toolsets)
+    ? runtime.toolsets.map((row) => ({ ...row, tools: Array.isArray(row.tools) ? [...row.tools] : [] }))
+    : [];
+  const browserIdx = toolsets.findIndex((row) => /browser/i.test(String(row.name || row.label || '')));
+  if (browserIdx >= 0) {
+    const have = new Set(toolsets[browserIdx].tools.map((name) => String(name).toLowerCase()));
+    for (const name of companion) {
+      if (!have.has(name)) toolsets[browserIdx].tools.push(name);
+    }
+    toolsets[browserIdx].tools.sort((a, b) => String(a).localeCompare(String(b)));
+    toolsets[browserIdx].companion = true;
+  } else {
+    toolsets.push({
+      name: 'companion',
+      label: 'Browser companion',
+      description: 'Active-tab actions this extension can mirror when Hermes calls them.',
+      enabled: true,
+      configured: true,
+      source: 'hermes-browser-companion',
+      companion: true,
+      tools: companion
+    });
+  }
+
+  const enabled = toolsets.filter((row) => row?.enabled !== false);
+  const unique = new Set();
+  for (const row of enabled) {
+    for (const name of row.tools || []) unique.add(String(name).toLowerCase());
+  }
+  const skills = Array.isArray(runtime.skills) ? runtime.skills : [];
+  const enabledSkills = skills.filter((row) => row?.enabled !== false);
+  return {
+    ...runtime,
+    toolsets,
+    summary: {
+      ...(runtime.summary || {}),
+      toolsets: toolsets.length,
+      enabledToolsets: enabled.length,
+      tools: unique.size,
+      skills: skills.length,
+      enabledSkills: enabledSkills.length,
+      companionTools: companion.length
+    }
+  };
+}
+
 function normalizeBrowserTool(name, args = {}) {
   const raw = String(name || '').trim().toLowerCase();
   const n = canonicalToolName(raw);
@@ -829,7 +882,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && route === '/v1/runtime') {
     try {
-      const runtime = await hermes.runtimeOverview();
+      const runtime = withCompanionCatalog(await hermes.runtimeOverview());
       json(res, 200, {
         object: 'hermes.runtime',
         hermes: cfg.hermesUrl,
