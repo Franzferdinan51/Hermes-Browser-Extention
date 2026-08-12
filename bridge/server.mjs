@@ -219,7 +219,27 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_scroll',
   'browser_back',
   'browser_press',
-  'browser_get_images'
+  'browser_get_images',
+  'browser_check',
+  'browser_uncheck',
+  'browser_clear',
+  'browser_hover',
+  'browser_focus',
+  'browser_select',
+  'browser_wait',
+  'browser_read',
+  'browser_grep',
+  'browser_diff',
+  'browser_evaluate',
+  'browser_click_at',
+  'browser_type_at',
+  'browser_hover_at',
+  'browser_drag',
+  'browser_fill',
+  'browser_forward',
+  'browser_reload',
+  'browser_tabs',
+  'browser_windows'
 ]);
 
 function isBrowserCompanionTool(name = '') {
@@ -246,6 +266,46 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'key', params: { keys: args.key ?? args.keys ?? args.text } };
     case 'browser_get_images':
       return { name: 'get_images', params: { limit: args.limit } };
+    case 'browser_check':
+      return { name: 'check', params: { selector } };
+    case 'browser_uncheck':
+      return { name: 'uncheck', params: { selector } };
+    case 'browser_clear':
+      return { name: 'clear', params: { selector } };
+    case 'browser_hover':
+      return { name: 'hover', params: { selector } };
+    case 'browser_focus':
+      return { name: 'focus', params: { selector } };
+    case 'browser_select':
+      return { name: 'select_option', params: { selector, value: args.value ?? args.option ?? args.text } };
+    case 'browser_wait':
+      return { name: 'wait', params: args };
+    case 'browser_read':
+      return { name: 'read', params: { selector, prop: args.prop } };
+    case 'browser_grep':
+      return { name: 'grep', params: { pattern: args.pattern || args.query, over: args.over, limit: args.limit } };
+    case 'browser_diff':
+      return { name: 'diff', params: { baseline: args.baseline || args.key } };
+    case 'browser_evaluate':
+      return { name: 'evaluate', params: { expression: args.expression || args.script || args.js } };
+    case 'browser_click_at':
+      return { name: 'click_at', params: { x: args.x, y: args.y, button: args.button, clickCount: args.clickCount } };
+    case 'browser_type_at':
+      return { name: 'type_into', params: { selector, text: args.text ?? args.value, clear: args.clear } };
+    case 'browser_hover_at':
+      return { name: 'hover_at', params: { selector, x: args.x, y: args.y } };
+    case 'browser_drag':
+      return { name: 'drag', params: { ref: args.ref || args.from, targetRef: args.targetRef || args.to } };
+    case 'browser_fill':
+      return { name: 'fill_many', params: { fields: args.fields || [] } };
+    case 'browser_forward':
+      return { name: 'forward', params: {} };
+    case 'browser_reload':
+      return { name: 'reload', params: {} };
+    case 'browser_tabs':
+      return { name: 'tabs', params: {} };
+    case 'browser_windows':
+      return { name: 'windows', params: {} };
     default:
       return null;
   }
@@ -399,13 +459,33 @@ function buildHermesPrompt(input) {
     'browser_navigate(url)',
     'browser_snapshot(full?)',
     'browser_click(@eN)',
+    'browser_click_at(x, y)',
     'browser_type(@eN, text)',
-    'browser_scroll(direction, amount?)',
+    'browser_type_at(@eN, text, clear?)',
+    'browser_fill(fields[])',
+    'browser_scroll(direction, amount?, @eN?)',
     'browser_back()',
+    'browser_forward()',
+    'browser_reload()',
     'browser_press(key)',
-    'browser_get_images()',
+    'browser_focus(@eN)',
+    'browser_hover(@eN)',
+    'browser_hover_at(x, y)',
+    'browser_check(@eN)',
+    'browser_uncheck(@eN)',
+    'browser_select(@eN, value)',
+    'browser_clear(@eN)',
+    'browser_drag(@eN, @eN)',
+    'browser_read(@eN)',
+    'browser_grep(pattern, over?, limit?)',
+    'browser_diff(baseline?)',
+    'browser_wait(selector?, text?, timeout?)',
+    'browser_get_images(limit?)',
+    'browser_evaluate(expression)',
     'browser_console()',
-    'browser_vision()'
+    'browser_vision()',
+    'browser_tabs()',
+    'browser_windows()'
   ];
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +

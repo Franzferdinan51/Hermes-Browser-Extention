@@ -159,8 +159,11 @@ async function snapshotTab(tabId) {
   const tab = tabs[0];
   if (!tab?.id) throw new Error('No tab');
 
+  // Primary: try the pre-declared content script (isolated world).
   let resp = await chrome.tabs.sendMessage(tab.id, { kind: 'read-page' }).catch(() => null);
-  if (!resp) {
+
+  // Fallback 1: force-inject the libraries into the page and retry.
+  if (!resp?.ok) {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ['lib/page-reader.js', 'lib/page-actor.js', 'lib/content.js']
@@ -168,12 +171,84 @@ async function snapshotTab(tabId) {
     resp = await chrome.tabs.sendMessage(tab.id, { kind: 'read-page' }).catch(() => null);
   }
 
+  // Fallback 2: self-contained capture straight in the MAIN world. This works
+  // even for pages where content scripts did not inject (activeTab grants the
+  // scripting host access after the user opens the panel), avoiding reliance
+  // on a pre-declared isolated-world listener.
+  if (!resp?.ok) {
+    resp = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: capturePageInline
+    }).then((results) => results?.[0]?.result || null).catch(() => null);
+  }
+
   if (resp?.ok && resp.snapshot) {
     lastSnapshot = { tabId: tab.id, url: tab.url, title: tab.title, snapshot: resp.snapshot };
     emit('page-snapshot', lastSnapshot);
     return lastSnapshot;
   }
+  if (resp?.url && resp.title) {
+    // Used for the inline MAIN-world fallback above.
+    lastSnapshot = { tabId: tab.id, url: tab.url, title: tab.title, snapshot: resp };
+    emit('page-snapshot', lastSnapshot);
+    return lastSnapshot;
+  }
   return null;
+}
+
+/** Runs in the page (MAIN world) via executeScript when content scripts are absent. */
+function capturePageInline() {
+  try {
+    const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+    const isVisible = (el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return false;
+      const cs = window.getComputedStyle(el);
+      return cs.display !== 'none' && cs.visibility !== 'hidden' && +(cs.opacity || '1') !== 0;
+    };
+    const visible = (sel, max = 800) => Array.from(document.querySelectorAll(sel)).filter(isVisible).slice(0, max);
+    const interactive = visible('a,button,input,select,textarea,[role="button"],[role="link"],[contenteditable="true"]').map((node, i) => {
+      const ref = `e${i + 1}`;
+      try { node.setAttribute('data-hermes-ref', ref); } catch {}
+      let sel = '';
+      try {
+        const parts = [];
+        let n = node;
+        while (n && n.nodeType === 1 && n.tagName !== 'BODY' && parts.length < 5) {
+          let part = n.tagName.toLowerCase();
+          if (n.id) { part += '#' + n.id; }
+          else if (n.className && typeof n.className === 'string') { part += '.' + n.className.trim().split(/\s+/).slice(0, 2).join('.'); }
+          parts.unshift(part);
+          n = n.parentElement;
+        }
+        sel = parts.join(' > ');
+      } catch {}
+      return {
+        ref, tag: node.tagName.toLowerCase(), selector: sel,
+        value: node.value !== undefined && String(node.value) ? clean(node.value).slice(0, 200) : '',
+        placeholder: node.getAttribute('placeholder') || '',
+        href: node.href ? node.href.slice(0, 500) : '',
+        text: node.tagName === 'INPUT' ? '' : clean(node.textContent || '').slice(0, 280),
+        aria: node.getAttribute('aria-label') || '', role: node.getAttribute('role') || ''
+      };
+    });
+    return {
+      ok: true,
+      url: location.href,
+      title: document.title,
+      text: clean(document.body.innerText || document.body.textContent || '').slice(0, 12000),
+      interactive,
+      accessibility: visible('h1,h2,h3,a,button,input,select,textarea,[role="button"],[role="link"]').map((node) => {
+        const ref = node.getAttribute('data-hermes-ref') || '';
+        const label = clean(node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.textContent || node.value || '').slice(0, 180);
+        return `[${ref}] ${node.tagName.toLowerCase()}${label ? ': ' + label : ''}`;
+      }).join('\n')
+    };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 }
 
 function safeNavigationUrl(value) {
@@ -222,11 +297,19 @@ async function runNativeTabAction(name, params, tabId) {
         value: {
           url: snap.url,
           title: snap.title,
-          document: String(snap.snapshot.dom || '').slice(0, maxChars),
+          document: String(snap.snapshot.dom || snap.snapshot.text || '').slice(0, maxChars),
           accessibility: String(snap.snapshot.accessibility || '').slice(0, maxChars),
           interactive: (snap.snapshot.interactive || []).slice(0, 250)
         }
       };
+    }
+    case 'tabs': {
+      const tabs = await chrome.tabs.query({});
+      return { ok: true, value: tabs.map((tab) => ({ id: tab.id, windowId: tab.windowId, active: !!tab.active, title: tab.title || '', url: tab.url || '' })) };
+    }
+    case 'windows': {
+      const windows = await chrome.windows.getAll({ populate: false });
+      return { ok: true, value: windows.map((win) => ({ id: win.id, focused: !!win.focused, state: win.state || '', type: win.type || '' })) };
     }
     default:
       return null;
@@ -276,13 +359,16 @@ async function chat(userText, opts = {}) {
     try { snapshot = await snapshotTab(opts.tabId); } catch {}
     if (snapshot?.snapshot) {
       const dom = snapshot.snapshot.dom || '';
+      // MAIN-world inline fallback exposes .text instead of .dom; surface it so
+      // Hermes still gets the actual page body on pages without content scripts.
+      const doc = dom || snapshot.snapshot.text || '';
       const interactive = (snapshot.snapshot.interactive || []).slice(0, 200);
       const maxDomChars = Math.max(5000, Math.min(100000, Number(cfg.maxDomChars) || 30000));
       extra.context = [{
         type: 'page_context',
         url: snapshot.url,
         title: snapshot.title,
-        document: dom.slice(0, maxDomChars),
+        document: doc.slice(0, maxDomChars),
         accessibility: snapshot.snapshot.accessibility || '',
         interactive,
         time: Date.now()

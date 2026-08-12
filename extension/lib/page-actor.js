@@ -215,18 +215,7 @@ function actionFocus(p = {}) {
   return { ok: true, value: `focused ${selector}` };
 }
 
-async function actionHover(p = {}) {
-  const selector = targetLabel(p);
-  const target = el(selector);
-  if (!target) return { ok: false, error: `Element not found: ${selector}` };
-  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
-  fireMouse(target, 'mouseover');
-  fireMouse(target, 'mouseenter');
-  fireMouse(target, 'mousemove');
-  return { ok: true, value: `hovered ${selector}` };
-}
-
-function actionSelectOption(p = {}) {
+async function actionSelectOption(p = {}) {
   const selector = targetLabel(p);
   const target = el(selector);
   if (!target) return { ok: false, error: `Element not found: ${selector}` };
@@ -325,6 +314,157 @@ function actionReload() {
   return { ok: true, value: 'reloading page' };
 }
 
+// ---------------------------------------------------------------------------
+// BrowserOS-parity actions (check/uncheck/clear/drag/_at coordinates/diff/eval)
+// ---------------------------------------------------------------------------
+
+/** Find the top element underneath viewport coordinates, else the ref. */
+function elementAtPoint(x, y, fallbackSelector) {
+  if (typeof x === 'number' && typeof y === 'number' && typeof document.elementFromPoint === 'function') {
+    try {
+      const at = document.elementFromPoint(x, y);
+      if (at) return at;
+    } catch {}
+  }
+  if (fallbackSelector) return el(fallbackSelector);
+  return null;
+}
+
+async function actionCheck(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  if (!(target instanceof HTMLInputElement)) return { ok: false, error: `${selector} is not a checkbox/input element` };
+  if (!target.checked) {
+    fireMouse(target, 'pointerdown', { button: 0 });
+    fireMouse(target, 'mousedown', { button: 0 });
+    fireMouse(target, 'mouseup', { button: 0 });
+    fireMouse(target, 'click', { button: 0 });
+    target.checked = true;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return { ok: true, value: `checked ${selector}` };
+}
+
+async function actionUncheck(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  if (!(target instanceof HTMLInputElement)) return { ok: false, error: `${selector} is not a checkbox/input element` };
+  if (target.checked) {
+    fireMouse(target, 'pointerdown', { button: 0 });
+    fireMouse(target, 'mousedown', { button: 0 });
+    fireMouse(target, 'mouseup', { button: 0 });
+    fireMouse(target, 'click', { button: 0 });
+    target.checked = false;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return { ok: true, value: `unchecked ${selector}` };
+}
+
+async function actionClear(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  try { target.focus({ preventScroll: true }); } catch {}
+  dispatchInput(target, '');
+  if (target.isContentEditable) target.textContent = '';
+  return { ok: true, value: `cleared ${selector}` };
+}
+
+/** Multi-field fill (BrowserOS fill fields[]). */
+async function actionFillMany(p = {}) {
+  const fields = Array.isArray(p.fields) ? p.fields : [];
+  if (!fields.length) return { ok: false, error: 'fill requires fields[] (ref/value pairs)' };
+  const results = [];
+  for (const field of fields) {
+    const selector = field.ref || field.selector || field.element;
+    const target = selector ? el(selector) : null;
+    if (!target) { results.push({ ref: selector, ok: false, error: 'not found' }); continue; }
+    try { target.focus({ preventScroll: true }); } catch {}
+    dispatchInput(target, field.value ?? field.text ?? '');
+    results.push({ ref: selector, ok: true });
+  }
+  const failed = results.filter((r) => !r.ok).length;
+  return { ok: failed === 0, value: `filled ${results.length - failed}/${results.length} fields`, results };
+}
+
+/** BrowserOS click_at: coordinate-based click. */
+async function actionClickAt(p = {}) {
+  const target = elementAtPoint(p.x, p.y, p.selector || p.ref);
+  if (!target) return { ok: false, error: 'No element at coordinates' };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  await sleep(40);
+  fireMouse(target, 'pointerdown', { button: p.button || 0, clientX: p.x, clientY: p.y });
+  fireMouse(target, 'mousedown', { button: p.button || 0, clientX: p.x, clientY: p.y });
+  fireMouse(target, 'mouseup', { button: p.button || 0, clientX: p.x, clientY: p.y });
+  fireMouse(target, 'click', { button: p.button || 0, clientX: p.x, clientY: p.y });
+  return { ok: true, value: `clicked at (${p.x},${p.y})` };
+}
+
+/** BrowserOS type_at / click then type at coordinates. */
+async function actionTypeInto(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  try { target.focus({ preventScroll: true }); } catch {}
+  const text = String(p.text ?? p.value ?? '');
+  if (p.clear) dispatchInput(target, '');
+  dispatchInput(target, text);
+  return { ok: true, value: `typed into ${selector} (${text.length} chars)` };
+}
+
+/** BrowserOS hover_at: hover element under coordinates/ref. */
+function actionHover(p = {}) {
+  const selector = targetLabel(p);
+  const target = (typeof p.x === 'number' && typeof p.y === 'number') ? elementAtPoint(p.x, p.y, selector) : el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  fireMouse(target, 'mouseover');
+  fireMouse(target, 'mouseenter');
+  fireMouse(target, 'mousemove');
+  return { ok: true, value: `hovered ${p.x !== undefined ? `(${p.x},${p.y})` : selector}` };
+}
+
+/** BrowserOS drag: mouse drag between two refs. */
+async function actionDrag(p = {}) {
+  const from = el(p.ref || p.selector || p.from);
+  const to = el(p.targetRef || p.to);
+  if (!from || !to) return { ok: false, error: 'drag requires ref and targetRef' };
+  from.scrollIntoView({ block: 'center', inline: 'nearest' });
+  await sleep(30);
+  const move = (node, type) => fireMouse(node, type, { button: 0, bubbles: true, cancelable: true, composed: true });
+  move(from, 'pointerdown'); move(from, 'mousedown');
+  move(from, 'mousemove'); move(to, 'mousemove');
+  move(to, 'mouseup'); move(to, 'click');
+  return { ok: true, value: `dragged ${p.ref} → ${p.targetRef}` };
+}
+
+/** BrowserOS diff-style: return a compact mutation summary since a baseline signature. */
+function actionDiff(p = {}) {
+  const base = p.baseline || p.key || '';
+  const key = `${location.href}|${document.title}|${cleanText(String(document.body?.innerText || '')).slice(0, 400)}`;
+  const changed = !base || base !== key;
+  return { ok: true, value: { changed, url: location.href, title: document.title, key }, isChanged: changed };
+}
+
+/** BrowserOS evaluate: run a small read-only JS expression and return its JSON-safe result. */
+function actionEvaluate(p = {}) {
+  const expr = String(p.expression || p.script || p.js || '').trim();
+  if (!expr) return { ok: false, error: 'evaluate requires expression' };
+  try {
+    const result = new Function(`with(document){return (${expr});}`)();
+    const value = (() => {
+      try { return JSON.stringify(result, null, 0)?.slice(0, 20000); } catch { return String(result); }
+    })();
+    return { ok: true, value };
+  } catch (e) {
+    return { ok: false, error: `evaluate failed: ${e.message}` };
+  }
+}
+
 /** Main dispatcher: run one action, return a normalized {ok, value|error}. */
 async function runAction(action) {
   if (!action || typeof action !== 'object') return { ok: false, error: 'no action' };
@@ -333,15 +473,24 @@ async function runAction(action) {
   try {
     switch (name) {
       case 'click': return await actionClick(p);
+      case 'click_at': case 'clickat': return await actionClickAt(p);
       case 'fill': case 'input': case 'set_value': case 'setvalue': return await actionSetValue(p);
+      case 'fill_many': case 'fillmany': return await actionFillMany(p);
       case 'type': return await actionType(p);
+      case 'type_into': case 'type_into_input': case 'typeat': return await actionTypeInto(p);
       case 'key': case 'keys': case 'keypress': case 'press': return await actionKey(p);
       case 'scroll': return actionScroll(p);
       case 'read': case 'get_text': case 'extract': return actionRead(p);
       case 'grep': case 'search': return actionGrep(p);
       case 'focus': return actionFocus(p);
-      case 'hover': return await actionHover(p);
-      case 'select': case 'select_option': case 'selectoption': return actionSelectOption(p);
+      case 'hover': case 'hover_at': return actionHover(p);
+      case 'select': case 'select_option': case 'selectoption': return await actionSelectOption(p);
+      case 'check': case 'checkbox': return await actionCheck(p);
+      case 'uncheck': return await actionUncheck(p);
+      case 'clear': case 'clear_input': return await actionClear(p);
+      case 'drag': case 'drag_at': return await actionDrag(p);
+      case 'diff': case 'changed': return actionDiff(p);
+      case 'evaluate': case 'eval': case 'js': return actionEvaluate(p);
       case 'get_images': case 'images': return actionGetImages(p);
       case 'snapshot': return actionSnapshot();
       case 'wait': return await actionWait(p);

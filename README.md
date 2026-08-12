@@ -21,7 +21,9 @@ Sources and design references:
 - **Hermes refs work correctly** — both `e12` and native-style `@e12` references resolve against `data-hermes-ref` elements.
 - **Correlated active-tab actions** — browser-action requests carry a unique `requestId` and `toolCallId`, so concurrent actions cannot consume one another's result.
 - **No accidental `web_search` DOM execution** — only an explicit allowlist of compatible Hermes `browser_*` tools can be mirrored into the active tab.
-- **More capable page actor** — robust click/type/key/scroll/read/grep/hover/select/wait/image/snapshot helpers plus native tab navigation helpers.
+- **More capable page actor** — robust click/type/key/scroll/read/grep/hover/select/wait/image/snapshot helpers plus BrowserOS-inspired `check`, `uncheck`, `clear`, multi-field `fill`, coordinate click/type/hover, drag, diff, read-only evaluate, tabs, windows, and native navigation helpers.
+- **Reliable page context fallback** — if a content script is unavailable on a newly opened or restricted-compatible page, the service worker uses an `activeTab`-authorized inline snapshot fallback and still sends visible text, accessibility, and interactive refs to Hermes.
+- **BrowserOS parity note** — the expanded action names and concepts are mapped from the public BrowserOS MCP catalog (`tabs`, `snapshot`, `act`, `read`, `grep`, `diff`, `wait`, `evaluate`, `windows`, etc.) without copying BrowserOS source; this extension remains independently implemented and MIT-licensed.
 - **Bridge hardening** — loopback-only bind, extension-origin checks, optional HTTP + WebSocket token auth, HTTP(S)-only navigation, and constant-time token comparison.
 - **CI** — bridge self-test, jsdom page-actor tests, and syntax checks on push/PR, plus manual `workflow_dispatch`.
 

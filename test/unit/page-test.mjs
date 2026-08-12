@@ -28,6 +28,8 @@ const html = `<!doctype html>
   <button class="cta" data-testid="buy">Buy Now</button>
   <select name="sel"><option value="a">A</option><option value="b">B</option></select>
   <textarea name="notes"></textarea>
+  <label><input id="agree" type="checkbox" /> Agree</label>
+  <div id="drag-source">Drag source</div><div id="drag-target">Drop target</div>
   <img id="hero" src="https://example.com/hero.png" alt="Hero image" width="640" height="320" />
   <div style="display:none"><button>Hidden Button</button></div>
 </body>
@@ -165,6 +167,21 @@ async function drive() {
 
   const selRes = await actor.runAction({ name: 'select_option', params: { selector: 'select[name="sel"]', value: 'b' } });
   ok(selRes.ok && document.querySelector('select[name="sel"]').value === 'b', 'actor selects dropdown option');
+
+  const checkRes = await actor.runAction({ name: 'check', params: { selector: '#agree' } });
+  ok(checkRes.ok && document.getElementById('agree').checked, 'actor checks checkbox');
+  const uncheckRes = await actor.runAction({ name: 'uncheck', params: { selector: '#agree' } });
+  ok(uncheckRes.ok && !document.getElementById('agree').checked, 'actor unchecks checkbox');
+  const clearRes = await actor.runAction({ name: 'clear', params: { selector: '#q' } });
+  ok(clearRes.ok && document.getElementById('q').value === '', 'actor clears input');
+  const fillManyRes = await actor.runAction({ name: 'fill_many', params: { fields: [{ ref: '#q', value: 'multi' }, { ref: 'textarea[name="notes"]', value: 'note' }] } });
+  ok(fillManyRes.ok && document.getElementById('q').value === 'multi' && document.querySelector('textarea[name="notes"]').value === 'note', 'actor fills multiple fields');
+  const evalRes = await actor.runAction({ name: 'evaluate', params: { expression: 'document.title' } });
+  ok(evalRes.ok && String(evalRes.value).includes('Test Page'), 'actor evaluates read-only page expression');
+  const diffRes = await actor.runAction({ name: 'diff', params: { baseline: 'stale-baseline' } });
+  ok(diffRes.ok && diffRes.isChanged === true, 'actor reports page diff');
+  const dragRes = await actor.runAction({ name: 'drag', params: { ref: '#drag-source', targetRef: '#drag-target' } });
+  ok(dragRes.ok, 'actor drags between elements');
 
   const hoverRes = await actor.runAction({ name: 'hover', params: { selector: `@${refButton.ref}` } });
   ok(hoverRes.ok, 'actor hovers Hermes ref');
