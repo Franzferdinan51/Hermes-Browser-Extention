@@ -16,6 +16,8 @@ const BRIDGE_TOKEN = 'bridge-test-token';
 let passed = 0;
 let failed = 0;
 let lastChatStartPayload = null;
+let cancelledStreamIds = [];
+let conflictOnce = new Set();
 function ok(cond, name) {
   if (cond) { passed++; console.log('  ✓ ' + name); }
   else { failed++; console.log('  ✗ ' + name); }
@@ -43,8 +45,22 @@ const fake = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && req.url.includes('/api/chat/start')) {
     lastChatStartPayload = await readJson(req);
+    const prompt = String(lastChatStartPayload?.message || '');
+    if (prompt.includes('STREAM_CONFLICT_PROBE') && !conflictOnce.has('stream')) {
+      conflictOnce.add('stream');
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'session already has an active stream', active_stream_id: 'stuck_stream' }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ stream_id: 'fake_stream' }));
+    return;
+  }
+  if (req.url.includes('/api/chat/cancel')) {
+    const id = new URL(req.url, 'http://127.0.0.1').searchParams.get('stream_id') || '';
+    cancelledStreamIds.push(id);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, cancelled: true, stream_id: id }));
     return;
   }
   if (req.method === 'GET' && req.url.includes('/api/chat/stream')) {
@@ -352,6 +368,19 @@ async function main() {
   ok(!stayActions.some((msg) => msg.action?.name === 'navigate' && /google|bing/i.test(String(msg.action?.params?.url || ''))), 'search-engine navigate is not sent to another browser');
   ok(!stayActions.some((msg) => msg.action?.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(msg.action?.params?.action || ''))), 'new-page is not opened while a tab is attached');
   ok(stayActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'leave-tab tools stay on the attached page');
+
+  const conflict = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      messages: [{ role: 'user', content: 'STREAM_CONFLICT_PROBE say hi' }]
+    })
+  });
+  const conflictBody = await conflict.text();
+  ok(cancelledStreamIds.includes('stuck_stream'), 'a stuck Hermes stream is cancelled before retrying chat/start');
+  ok(conflictBody.includes('"RUN_STARTED"') && conflictBody.includes('Hello '), 'chat recovers after a 409 active-stream conflict');
+  ok(!conflictBody.includes('session already has an active stream'), '409 conflict is not surfaced as a failed run');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();

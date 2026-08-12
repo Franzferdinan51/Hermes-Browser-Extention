@@ -837,15 +837,22 @@ async function runAgent(threadId, runId, input, res) {
 
   const userText = buildHermesPrompt(input, threadId);
   const messageId = uid('asst_');
+  let cancelIfClientGone = null;
 
   try {
-    const { stream, sessionId } = await hermes.chatStream(userText, {
+    const { stream, sessionId, stream_id: streamId } = await hermes.chatStream(userText, {
       model: input.model,
       modelProvider: input.modelProvider,
       workspace: input.workspace,
+      attached: attachPin(input, threadId).attached,
       sessionId: hermesSessions.get(threadId) || undefined
     });
     if (threadId && sessionId) rememberThread(hermesSessions, threadId, sessionId);
+    const req = res.req;
+    cancelIfClientGone = () => {
+      if (!res.writableEnded) hermes.cancelStream(streamId).catch(() => {});
+    };
+    req?.once?.('close', cancelIfClientGone);
 
     res.write(sse(textStart(messageId)));
     const toolAccum = new Map();
@@ -920,6 +927,7 @@ async function runAgent(threadId, runId, input, res) {
   } catch (e) {
     res.write(sse(runError(threadId, runId, e.message, 'bridge_error')));
   } finally {
+    if (cancelIfClientGone) try { res.req?.off?.('close', cancelIfClientGone); } catch {}
     res.end();
   }
 }

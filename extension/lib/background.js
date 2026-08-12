@@ -710,7 +710,7 @@ function relayToPorts(type, payload) {
     try { port.postMessage({ kind: type, ...payload }); } catch {}
   });
 }
-relay.addEventListener('agui-event', (e) => relayToPorts('event', { event: e.detail }));
+relay.addEventListener('agui-event', (e) => relayToPorts('event', { event: e.detail, sendToken: currentSendToken }));
 relay.addEventListener('run-start', (e) => relayToPorts('run-start', { text: e.detail.userText }));
 relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, aborted: e.detail.aborted, error: e.detail.error, sendToken: e.detail.sendToken }));
 relay.addEventListener('page-snapshot', (e) => relayToPorts('page-snapshot', { snapshot: e.detail }));

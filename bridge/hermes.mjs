@@ -25,6 +25,7 @@ export class HermesClient extends EventEmitter {
     this._cookie = null;
     this._cookieExpiry = 0;
     this._sessionId = null;
+    this._streamId = null;
   }
 
   async _login(force = false) {
@@ -138,7 +139,7 @@ export class HermesClient extends EventEmitter {
     };
   }
 
-  async _ensureSession() {
+  async _ensureSession({ attached = false } = {}) {
     const cookie = await this._login();
     if (this._sessionId) return this._sessionId;
     const r = await fetch(`${this.baseUrl}/api/session/new`, {
@@ -148,9 +149,10 @@ export class HermesClient extends EventEmitter {
         workspace: this.workspace || undefined,
         model: this.model,
         model_provider: this.modelProvider,
-        // Keep the existing session contract used by the companion. Runtime
-        // toolset discovery is read-only and does not silently mutate it.
-        enabled_toolsets: ['hermes-cli', 'browser']
+        // Attached companion chats already have the live Chrome tab. Enabling
+        // Hermes' native browser toolset here launches a second browser and
+        // often never returns a reply.
+        enabled_toolsets: attached ? ['hermes-cli'] : ['hermes-cli', 'browser']
       })
     });
     if (!r.ok) {
@@ -176,7 +178,7 @@ export class HermesClient extends EventEmitter {
     let sessionId = extra.sessionId || null;
     if (!sessionId) {
       this.resetSession();
-      sessionId = await this._ensureSession();
+      sessionId = await this._ensureSession({ attached: Boolean(extra.attached) });
     }
     this._sessionId = sessionId;
 
@@ -198,28 +200,35 @@ export class HermesClient extends EventEmitter {
       body: JSON.stringify(body)
     });
 
+    const readStartError = async (response) => {
+      const text = await response.text().catch(() => '');
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+      return { text, data };
+    };
+
     let start = await startChat();
+    let startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    if (start.status === 401 || start.status === 403) {
+      await this._login(true);
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    }
+    if (start.status === 409) {
+      const stuckId = startError.data?.active_stream_id || this._streamId || '';
+      await this.cancelStream(stuckId);
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    }
+    if (start.status === 409 || (start.status === 404 && /session\s+not\s+found/i.test(startError.text))) {
+      this.resetSession();
+      sessionId = await this._ensureSession({ attached: Boolean(extra.attached) });
+      body.session_id = sessionId;
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    }
     if (!start.ok) {
-      const t = await start.text().catch(() => '');
-      if ((start.status === 401 || start.status === 403)) {
-        await this._login(true);
-        start = await startChat();
-        if (!start.ok) {
-          const retryText = await start.text().catch(() => '');
-          throw new Error(`Hermes chat/start: HTTP ${start.status} ${retryText.slice(0, 200)}`);
-        }
-      } else if (start.status === 404 && /session\s+not\s+found/i.test(t)) {
-        this._sessionId = null;
-        sessionId = await this._ensureSession();
-        body.session_id = sessionId;
-        start = await startChat();
-        if (!start.ok) {
-          const retryText = await start.text().catch(() => '');
-          throw new Error(`Hermes chat/start: HTTP ${start.status} ${retryText.slice(0, 200)}`);
-        }
-      } else {
-        throw new Error(`Hermes chat/start: HTTP ${start.status} ${t.slice(0, 200)}`);
-      }
+      throw new Error(`Hermes chat/start: HTTP ${start.status} ${startError.text.slice(0, 200)}`);
     }
 
     const j = await start.json().catch(() => ({}));
@@ -236,10 +245,28 @@ export class HermesClient extends EventEmitter {
       });
     }
     if (!res.ok || !res.body) throw new Error(`Hermes chat/stream: HTTP ${res.status}`);
+    this._streamId = streamId;
     return { stream: res.body, sessionId, stream_id: streamId };
   }
 
-  resetSession() { this._sessionId = null; }
+  async cancelStream(streamId = this._streamId) {
+    const id = String(streamId || '').trim();
+    if (!id) return false;
+    try {
+      const cookie = await this._login();
+      const url = `${this.baseUrl}/api/chat/cancel?stream_id=${encodeURIComponent(id)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Cookie: cookie, Accept: 'application/json' }
+      });
+      if (this._streamId === id) this._streamId = null;
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  resetSession() { this._sessionId = null; this._streamId = null; }
 }
 
 /** Parse an SSE byte stream into an async iterator of {event, data} frames. */

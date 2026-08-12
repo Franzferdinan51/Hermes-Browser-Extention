@@ -467,7 +467,7 @@ function handleCustom(e) {
   }
 }
 
-function handleEvent(e) {
+function handleEvent(e, sendToken) {
   const t = e.type;
   switch (t) {
     case 'RUN_STARTED':
@@ -513,12 +513,14 @@ function handleEvent(e) {
       flushText();
       finalizeStream();
       finalizeOpenTools(true);
+      idleComposer(sendToken, 'done');
       setTimeout(() => { if (!busy) runLabel(''); }, 1400);
       break;
     case 'RUN_ERROR':
       flushText();
       finalizeStream();
       finalizeOpenTools(false, e.error || e.message);
+      idleComposer(sendToken, 'error');
       showError(e.error || e.message || 'unknown');
       break;
     default:
@@ -568,7 +570,7 @@ function setStatus(state) {
 function connectPort() {
   try { port = chrome.runtime.connect({ name: 'panel' }); } catch { return; }
   port.onMessage.addListener((m) => {
-    if (m.kind === 'event' && m.event) handleEvent(m.event);
+    if (m.kind === 'event' && m.event) handleEvent(m.event, m.sendToken);
     else if (m.kind === 'state') {
       bridgeConnected = Boolean(m.bridgeConnected);
       setStatus(m.clientBusy ? 'busy' : bridgeConnected ? 'ok' : 'err');
