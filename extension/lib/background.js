@@ -36,6 +36,29 @@ let client = null;
 let currentThreadId = null;
 let lastSnapshot = null;
 let lastRuntime = null;
+let ownedTabId = null;
+
+function isRestrictedUrl(url = '') {
+  return /^(chrome|edge|brave|opera|about|devtools|chrome-extension|moz-extension):/i.test(String(url || ''));
+}
+
+async function getPageTab(preferredId) {
+  const tryId = preferredId || ownedTabId;
+  if (tryId != null) {
+    const tab = await chrome.tabs.get(tryId).catch(() => null);
+    if (tab?.id != null && !isRestrictedUrl(tab.url)) return tab;
+  }
+  const queries = [
+    { active: true, lastFocusedWindow: true },
+    { active: true, currentWindow: true }
+  ];
+  for (const query of queries) {
+    const [tab] = await chrome.tabs.query(query).catch(() => []);
+    if (tab?.id != null && !isRestrictedUrl(tab.url)) return tab;
+  }
+  const httpTabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] }).catch(() => []);
+  return httpTabs.find((tab) => tab.active) || httpTabs[0] || null;
+}
 
 function persistThreadId(id) {
   const threadId = String(id || '').trim();
@@ -148,9 +171,12 @@ function connectBridgeWs() {
       if (msg.kind !== 'browser-action') return;
 
       let tab = null;
-      try { tab = await getActiveTab(); } catch {}
-      let result = { ok: false, error: 'no active tab' };
-      if (tab?.id != null) result = await runActionOnTab(msg.action, tab.id);
+      try { tab = await getPageTab(); } catch {}
+      let result = { ok: false, error: 'no attached page tab' };
+      if (tab?.id != null) {
+        ownedTabId = tab.id;
+        result = await runActionOnTab(msg.action, tab.id);
+      }
 
       if (bridgeWs?.readyState === WebSocket.OPEN) {
         bridgeWs.send(JSON.stringify({
@@ -179,17 +205,17 @@ function connectBridgeWs() {
 connectBridgeWs();
 
 async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab || null;
+  return getPageTab();
 }
 
 // ---------------------------------------------------------------------------
 // Page context and browser actions
 // ---------------------------------------------------------------------------
 async function snapshotTab(tabId) {
-  const tabs = tabId ? [{ id: tabId }] : await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await getPageTab();
   if (!tab?.id) throw new Error('No tab');
+  if (isRestrictedUrl(tab.url)) throw new Error('Cannot attach a restricted browser page');
+  ownedTabId = tab.id;
 
   // Primary: try the pre-declared content script (isolated world).
   let resp = await chrome.tabs.sendMessage(tab.id, { kind: 'read-page' }).catch(() => null);
@@ -443,10 +469,13 @@ async function chat(userText, opts = {}) {
       const doc = dom || snapshot.snapshot.text || '';
       const interactive = (snapshot.snapshot.interactive || []).slice(0, 200);
       const maxDomChars = Math.max(5000, Math.min(100000, Number(cfg.maxDomChars) || 30000));
+      extra.attachPage = true;
+      extra.attachedTab = { id: snapshot.tabId, url: snapshot.url, title: snapshot.title };
       extra.context = [{
         type: 'page_context',
         url: snapshot.url,
         title: snapshot.title,
+        tabId: snapshot.tabId,
         document: doc.slice(0, maxDomChars),
         accessibility: snapshot.snapshot.accessibility || '',
         signals: snapshot.snapshot.signals || [],

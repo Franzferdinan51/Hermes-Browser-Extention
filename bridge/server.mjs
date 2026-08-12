@@ -789,11 +789,13 @@ async function runAgent(threadId, runId, input, res) {
 /** Build the Hermes turn with page context + role-preserving conversation. */
 function buildHermesPrompt(input, threadId = input.threadId) {
   const parts = [];
+  const pageContext = (input.context || []).find((ctx) => ctx.type === 'page_context' || ctx.document);
+  const attached = Boolean(input.attachPage || pageContext || input.attachedTab);
 
   for (const ctx of input.context || []) {
     if (ctx.type === 'page_context' || ctx.document) {
       parts.push(
-        `[PAGE CONTEXT]\nURL: ${ctx.url || ''}\nTITLE: ${ctx.title || ''}\n\n${ctx.document || ''}` +
+        `[PAGE CONTEXT]\nURL: ${ctx.url || input.attachedTab?.url || ''}\nTITLE: ${ctx.title || input.attachedTab?.title || ''}\nTAB: ${ctx.tabId || input.attachedTab?.id || 'active'}\n\n${ctx.document || ''}` +
         (ctx.accessibility ? `\n\n[ACCESSIBILITY SNAPSHOT]\n${ctx.accessibility}` : '') +
         (ctx.signals?.length
           ? `\n\n[PAGE STATUS SIGNALS]\n${ctx.signals.map((s) => `- ${s.hidden ? '[hidden] ' : ''}${s.role || 'signal'}: ${s.text || ''}`).join('\n')}`
@@ -805,6 +807,19 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     } else {
       parts.push(`[CONTEXT ${ctx.type || 'context'}]\n${JSON.stringify(ctx)}`);
     }
+  }
+
+  if (attached) {
+    const url = pageContext?.url || input.attachedTab?.url || '';
+    parts.push(
+      `[ATTACHED LIVE TAB]\n` +
+      `The user attached their real Chrome tab${url ? ` (${url})` : ''}. This is not a Hermes-internal, headless, or secondary browser.\n` +
+      `Answer from [PAGE CONTEXT] first.\n` +
+      `Do not call web_search or web_extract to re-fetch this page.\n` +
+      `Do not browser_navigate to this same URL or to a search engine unless the user explicitly asks to leave this tab.\n` +
+      `If you need more of the page, call browser_snapshot, browser_read, browser_scroll, or browser_grep. The companion will run those in the attached tab.\n` +
+      `Only use web_search if the user asks for information that is clearly not on this page.`
+    );
   }
 
   for (const message of input.messages || []) {
@@ -895,9 +910,10 @@ function buildHermesPrompt(input, threadId = input.threadId) {
   ];
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
-    'When the browser toolset is available, use Hermes accessibility refs such as @e1 from browser_snapshot. ' +
-    'Prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ' +
-    'Do not print fake JSON tool calls as prose. The browser companion may mirror compatible browser actions into the user\'s active tab, but Hermes remains the source of truth for tool execution.'
+    (attached
+      ? 'The live Chrome tab is already attached. Use @e1 refs from the page snapshot and companion-mirrored browser tools on that tab. Do not open another browser. '
+      : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
+    'Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );
 
   return parts.join('\n\n').trim();
