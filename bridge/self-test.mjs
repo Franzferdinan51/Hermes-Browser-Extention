@@ -85,6 +85,15 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('TOOL_DONE_CONTINUE_PROBE')) {
+      emit('token', { text: 'Before tool. ' });
+      emit('tool_complete', { name: 'web_search', done: true, args: { query: 'x' } });
+      emit('complete', { text: '' });
+      emit('token', { text: 'After tool.' });
+      emit('done', {});
+      res.end();
+      return;
+    }
     if (prompt.includes('EMPTY_MODEL_PROBE')) {
       emit('reasoning', { text: 'thinking only' });
       emit('done', {});
@@ -115,14 +124,24 @@ const fake = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.includes('/api/providers')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      providers: [{ id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model', { id: 'object-model', label: 'Object Model' }] }],
+      providers: [
+        { id: 'lmstudio', display_name: 'LM Studio', has_key: true, models: ['fake-model', { id: 'object-model', label: 'Object Model' }] },
+        { id: 'openrouter', display_name: 'OpenRouter', has_key: false, models: ['anthropic/claude-sonnet'] }
+      ],
       active_provider: 'lmstudio'
     }));
     return;
   }
   if (req.method === 'GET' && req.url.includes('/api/models')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ active_provider: 'lmstudio', default_model: 'fake-model', groups: [] }));
+    res.end(JSON.stringify({
+      active_provider: 'lmstudio',
+      default_model: 'fake-model',
+      groups: [
+        { provider_id: 'nous', provider: 'Nous Portal', models: [{ id: 'hermes-3', label: 'Hermes 3' }] },
+        { provider_id: 'openrouter', provider: 'OpenRouter', models: [], extra_models: [{ id: 'openai/gpt-5.4-mini', label: 'GPT 5.4 Mini' }] }
+      ]
+    }));
     return;
   }
   if (req.method === 'GET' && req.url.includes('/api/tools/toolsets')) {
@@ -237,6 +256,9 @@ async function main() {
   } catch {}
   ok(models.data?.some((m) => m.id === '@lmstudio:fake-model'), 'model endpoint flattens configured Hermes provider');
   ok(models.data?.some((m) => m.id === '@lmstudio:object-model' && m.label === 'Object Model'), 'object-shaped models keep a qualified provider id');
+  ok(models.data?.some((m) => m.id === '@openrouter:anthropic/claude-sonnet'), 'providers without has_key still list their models');
+  ok(models.data?.some((m) => m.id === '@nous:hermes-3'), 'catalog groups are merged into the model list');
+  ok(models.data?.some((m) => m.id === '@openrouter:openai/gpt-5.4-mini' && m.label === 'GPT 5.4 Mini'), 'catalog extra_models are included in the dropdown');
 
   // Hermes-native toolset + skill metadata.
   let runtime = {};
@@ -407,6 +429,14 @@ async function main() {
     body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'EMPTY_MODEL_PROBE' }] })
   })).text();
   ok(empty.includes('returned no visible text'), 'a silent model still gets a visible fallback instead of an empty reply');
+
+  const afterTool = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ agentId: 'hermes', messages: [{ role: 'user', content: 'TOOL_DONE_CONTINUE_PROBE' }] })
+  })).text();
+  ok(afterTool.includes('Before tool.') && afterTool.includes('After tool.'), 'tool_complete done:true does not cut off the rest of the reply');
+  ok(afterTool.includes('"RUN_FINISHED"'), 'a tool-then-text turn still finishes the AG-UI run');
 
   await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',

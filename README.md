@@ -2,7 +2,7 @@
 
 A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-**Current release: 0.3.5**
+**Current release: 0.3.6**
 
 Sources and design references:
 
@@ -10,6 +10,12 @@ Sources and design references:
 - **AG-UI** — MIT — agent ↔ UI event protocol
 - **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
 - **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
+
+## What 0.3.6 adds
+
+- Side-panel model picker can search the full Hermes catalog instead of a short keyed-provider subset.
+- `/v1/models` now merges `/api/providers` and `/api/models` groups, including `extra_models` and providers that do not have `has_key` set.
+- Chat no longer stops when Hermes emits `tool_complete` with `done: true`. Tokens after a tool stay on the same turn.
 
 ## What 0.3.5 adds
 

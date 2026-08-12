@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Hermes Agent — Browser Companion",
   "short_name": "Hermes",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Connect Hermes to the browser over AG-UI with live toolset/skill discovery, page context, rich streaming responses, and correlated DOM actions.",
   "permissions": [
     "sidePanel",

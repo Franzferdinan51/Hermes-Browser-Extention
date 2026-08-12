@@ -666,14 +666,22 @@ function providerName(m) {
 function renderModels() {
   const select = $('modelSelect');
   const filter = $('modelFilter')?.value.trim().toLowerCase() || '';
-  const visible = allModels.filter((m) => !filter || `${m.id} ${m.label} ${m.provider} ${m.providerLabel}`.toLowerCase().includes(filter));
-  if ($('modelCount')) $('modelCount').textContent = `${visible.length}/${allModels.length}`;
+  const matches = (m) => !filter || `${m.id} ${m.label} ${m.provider} ${m.providerLabel}`.toLowerCase().includes(filter);
+  const selected = allModels.find((m) => m.id === selectedModelId && (!selectedProvider || m.provider === selectedProvider))
+    || allModels.find((m) => m.id === selectedModelId);
+  let visible = allModels.filter(matches);
+  if (selected && !visible.some((m) => m.id === selected.id && m.provider === selected.provider)) {
+    visible = [selected, ...visible];
+  }
+  if ($('modelCount')) $('modelCount').textContent = filter
+    ? `${visible.filter(matches).length}/${allModels.length}`
+    : String(allModels.length);
   select.innerHTML = '';
 
   if (!visible.length) {
     const option = document.createElement('option');
     option.disabled = true;
-    option.textContent = 'No matching models';
+    option.textContent = allModels.length ? 'No matching models' : 'No models from Hermes';
     select.appendChild(option);
     return;
   }

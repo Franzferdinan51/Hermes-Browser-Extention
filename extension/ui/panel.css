@@ -85,12 +85,12 @@ button.mini { padding: 3px 9px; font-size: 11px; }
 .msg.state { align-self: stretch; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px dashed var(--border); }
 
 .composer { border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 94%, transparent); padding: 8px 10px 7px; box-shadow: 0 -10px 30px rgba(0,0,0,.08); }
-.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .model-picker { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .model-picker span { font-size: 9px; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
 .model-picker select { min-width: 0; flex: 1; padding: 5px 8px; font-size: 11px; border-radius: 7px; }
-.model-filter-row { display: flex; gap: 8px; align-items: center; margin: 0 0 7px 46px; }
-.model-filter-row input { min-width: 0; flex: 1; padding: 5px 8px; font-size: 11px; }
+.model-filter-row { display: flex; gap: 8px; align-items: center; margin: 0 0 7px; }
+.model-filter-row input { min-width: 0; flex: 1; padding: 5px 8px; font-size: 11px; border-radius: 7px; }
 #modelCount { white-space: nowrap; font-size: 10px; min-width: 34px; text-align: right; }
 .icon-btn { padding: 5px 8px; font-size: 15px; line-height: 1; }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }

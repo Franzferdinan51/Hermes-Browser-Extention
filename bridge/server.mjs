@@ -883,9 +883,11 @@ async function runAgent(threadId, runId, input, res) {
 
     for await (const { event, data, final } of readSSE(stream)) {
       if (final) break;
+      const eventName = String(event || data?.type || '').toLowerCase();
+      // Only the Hermes run terminal events end the turn. tool_complete and
+      // step "complete" payloads often set done:true and must not stop tokens.
+      if (eventName === 'done' || eventName === 'stream_end') break;
       if (!data) continue;
-
-      const eventName = String(event || data.type || '').toLowerCase();
       if ((eventName === 'token' || eventName === 'interim_assistant' || eventName === 'assistant' || eventName === 'text' || eventName === 'output') && !data.already_streamed) {
         const chunk = takeText(data);
         if (chunk) {
@@ -917,6 +919,18 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
 
+      if (eventName === 'tool_complete' || eventName === 'tool_result') {
+        continue;
+      }
+      if (eventName === 'complete') {
+        const chunk = takeText(data);
+        if (chunk && !data.already_streamed) {
+          sawVisibleText = true;
+          res.write(sse(textDelta(messageId, chunk)));
+        }
+        continue;
+      }
+
       if (eventName === 'tool' || eventName === 'tool_call' || data.type === 'tool_call' || (data.name && data.args !== undefined)) {
         const tcid = data.tool_call_id || data.id || uid('tool_');
         const name = data.name || data.tool_name || toolAccum.get(tcid)?.name || '';
@@ -941,7 +955,6 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
 
-      if (eventName === 'done' || eventName === 'complete' || eventName === 'stream_end' || data.done) break;
     }
 
     if (!sawVisibleText) {
@@ -1112,6 +1125,35 @@ function buildHermesPrompt(input, threadId = input.threadId) {
 // ---------------------------------------------------------------------------
 // Hermes model/runtime proxy helpers
 // ---------------------------------------------------------------------------
+function pushInventoryModel(out, seen, item, provider, providerLabel, extra = {}) {
+  const rawId = typeof item === 'string' ? item : (item?.id || item?.model || item?.name);
+  if (!rawId) return;
+  const providerId = String(provider || '').trim();
+  const qualified = providerId && providerId !== 'moa' && !String(rawId).startsWith('@')
+    ? `@${providerId}:${rawId}`
+    : String(rawId);
+  if (seen.has(qualified)) return;
+  seen.add(qualified);
+  out.push({
+    ...(typeof item === 'object' && item ? item : {}),
+    id: qualified,
+    label: typeof item === 'string' ? item : (item.label || item.display_name || rawId),
+    provider: providerId,
+    providerLabel: providerLabel || providerId,
+    configured: extra.configured,
+    source: extra.source || 'catalog'
+  });
+}
+
+function groupModelBuckets(group = {}) {
+  return [
+    ...(Array.isArray(group.models) ? group.models : []),
+    ...(Array.isArray(group.extra_models) ? group.extra_models : []),
+    ...(Array.isArray(group.available_models) ? group.available_models : []),
+    ...(Array.isArray(group.model_list) ? group.model_list : [])
+  ];
+}
+
 async function modelInventory() {
   let providerData = null;
   try { providerData = await hermes.requestJson('/api/providers'); } catch {}
@@ -1120,48 +1162,61 @@ async function modelInventory() {
   if (!providerData) providerData = catalogData;
 
   const out = [];
+  const seen = new Set();
+  const providerMeta = new Map();
+
   if (Array.isArray(providerData?.providers)) {
     for (const group of providerData.providers) {
       const configured = group.has_key === true && !group.auth_error;
-      const active = group.id === cfg.modelProvider
-        || group.id === providerData.active_provider
-        || group.id === catalogData.active_provider;
-      if (!configured && !active) continue;
-      for (const item of group.models || []) {
-        const id = typeof item === 'string' ? item : item.id;
-        if (!id) continue;
-        out.push({
-          ...(typeof item === 'object' && item ? item : {}),
-          id: group.id === 'moa' ? id : `@${group.id}:${id}`,
-          label: typeof item === 'string' ? item : (item.label || id),
-          provider: group.id,
-          providerLabel: group.display_name || group.id
-        });
-      }
-    }
-    if (catalogData.active_provider === 'moa' && !out.some((item) => item.provider === 'moa')) {
-      const moaGroup = (catalogData.groups || []).find((group) => group.provider_id === 'moa');
-      for (const item of moaGroup?.models || []) {
-        if (item?.id) out.push({ id: item.id, label: item.label || item.id, provider: 'moa', providerLabel: moaGroup.provider || 'Mixture of Agents' });
-      }
-    }
-  } else {
-    const activeProvider = providerData?.active_provider || cfg.modelProvider;
-    for (const group of providerData?.groups || []) {
-      const provider = group.provider_id || '';
-      if (provider !== activeProvider) continue;
-      for (const item of group.models || []) {
-        if (!item?.id) continue;
-        out.push({
-          ...item,
-          id: item.id,
-          label: item.label || item.id,
-          provider,
-          providerLabel: group.provider || provider
+      providerMeta.set(String(group.id || ''), {
+        label: group.display_name || group.id,
+        configured
+      });
+      const blocked = Boolean(group.auth_error) && group.has_key !== true;
+      const items = groupModelBuckets(group);
+      if (blocked && !items.length) continue;
+      for (const item of items) {
+        pushInventoryModel(out, seen, item, group.id, group.display_name || group.id, {
+          configured,
+          source: 'provider'
         });
       }
     }
   }
+
+  for (const group of catalogData?.groups || providerData?.groups || []) {
+    const provider = group.provider_id || group.id || '';
+    const meta = providerMeta.get(String(provider));
+    for (const item of groupModelBuckets(group)) {
+      pushInventoryModel(out, seen, item, provider, group.provider || group.display_name || meta?.label || provider, {
+        configured: meta?.configured,
+        source: 'catalog'
+      });
+    }
+  }
+
+  if (Array.isArray(catalogData?.models)) {
+    for (const item of catalogData.models) {
+      pushInventoryModel(out, seen, item, catalogData.active_provider || cfg.modelProvider, catalogData.active_provider, {
+        source: 'catalog'
+      });
+    }
+  }
+
+  const fallbackModel = catalogData?.default_model || cfg.model;
+  const fallbackProvider = catalogData?.active_provider || providerData?.active_provider || cfg.modelProvider;
+  if (fallbackModel) {
+    pushInventoryModel(out, seen, fallbackModel, fallbackProvider, providerMeta.get(String(fallbackProvider))?.label || fallbackProvider, {
+      configured: true,
+      source: 'default'
+    });
+  }
+
+  out.sort((a, b) => {
+    const configuredDelta = Number(Boolean(b.configured)) - Number(Boolean(a.configured));
+    if (configuredDelta) return configuredDelta;
+    return String(a.providerLabel).localeCompare(String(b.providerLabel)) || String(a.label).localeCompare(String(b.label));
+  });
 
   return {
     object: 'list',

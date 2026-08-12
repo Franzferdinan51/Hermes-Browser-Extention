@@ -139,6 +139,8 @@ function updateModelMeta(m) {
   if (m.type) fields.push(`<span>${escapeHtml(String(m.type))}</span>`);
   if (m.context_length || m.contextLength) fields.push(`<span>${Number(m.context_length || m.contextLength).toLocaleString()} ctx</span>`);
   if (m.owned_by) fields.push(`<span>${escapeHtml(String(m.owned_by))}</span>`);
+  if (m.configured === true) fields.push('<span>configured</span>');
+  else if (m.configured === false) fields.push('<span>catalog</span>');
   fields.push(`<span class="code">${escapeHtml(m.id)}</span>`);
   el.innerHTML = fields.join('');
 }

@@ -63,7 +63,11 @@
         <span>MODEL</span>
         <select id="modelSelect" aria-label="Hermes model"><option>Loading models…</option></select>
       </label>
+      <span class="muted" id="modelCount"></span>
       <button id="refreshModels" class="icon-btn" title="Refresh model list">↻</button>
+    </div>
+    <div class="model-filter-row">
+      <input id="modelFilter" type="search" placeholder="Search models…" autocomplete="off" aria-label="Search models" />
     </div>
     <div class="composer-row">
       <textarea id="prompt" rows="1" placeholder="Message Hermes…"></textarea>
