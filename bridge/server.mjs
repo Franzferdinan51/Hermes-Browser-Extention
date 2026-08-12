@@ -269,7 +269,7 @@ function workingBrowserBlock(pin) {
     `You are already inside the user's real Chrome (${where || 'attached tab'}).\n` +
     `This attached tab is your only browser. Do all reading and clicking here.\n` +
     `Do not open Hermes' internal browser, a headless browser, Browserbase, or another window.\n` +
-    `Do not call web_search, web_extract, browser_navigate, browser_new_page, or browser_exec Python unless the user explicitly asks to leave this tab.\n` +
+    `Do not call web_search, web_extract, browser_navigate, browser_new_page, or browser_exec unless the user explicitly asks to leave this tab.\n` +
     `If you need more of THIS page, use browser_snapshot, browser_page_content, browser_read, browser_scroll, browser_grep, browser_click, or browser_type. The companion runs those in the attached tab.`
   );
 }
@@ -502,6 +502,7 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_visible',
   'browser_sessions',
   'browser_top_sites',
+  'browser_vision',
   'browser_discard'
 ]);
 
@@ -712,7 +713,7 @@ function normalizeBrowserTool(name, args = {}) {
     case 'browser_click':
       return { name: 'click', params: { selector } };
     case 'browser_type':
-      return { name: 'set_value', params: { selector, value: args.text ?? args.value ?? '' } };
+      return { name: 'type_into', params: { selector, text: args.text ?? args.value ?? '', clear: args.clear !== false } };
     case 'browser_scroll':
       return { name: 'scroll', params: { direction: args.direction, amount: args.amount, selector, y: args.y } };
     case 'browser_back':
@@ -782,6 +783,9 @@ function normalizeBrowserTool(name, args = {}) {
     case 'browser_cookies':
       return { name: 'cookies', params: args };
     case 'browser_console':
+      if (args.expression || args.js || args.code) {
+        return { name: 'evaluate', params: { expression: args.expression || args.js || args.code } };
+      }
       return { name: 'console', params: args };
     case 'browser_dialog':
       return { name: 'dialog', params: args };
@@ -796,6 +800,7 @@ function normalizeBrowserTool(name, args = {}) {
     case 'browser_zoom':
       return { name: 'zoom', params: args };
     case 'browser_screenshot':
+    case 'browser_vision':
       return { name: 'screenshot', params: args };
     case 'browser_pdf':
       return { name: 'pdf', params: args };

@@ -100,6 +100,15 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('TOOL_SHAPE_PROBE')) {
+      emit('tool_call', { tool_call_id: 'tref', name: 'browser_click', args: { ref: '@e1' } });
+      emit('tool_call', { tool_call_id: 'ttype', name: 'browser_type', args: { ref: '@e2', text: 'hello' } });
+      emit('tool_call', { tool_call_id: 'tcon', name: 'browser_console', args: { expression: 'document.title' } });
+      emit('tool_call', { tool_call_id: 'tvis', name: 'browser_vision', args: { question: 'what is on screen' } });
+      emit('done', {});
+      res.end();
+      return;
+    }
     if (prompt.includes('RUN_SHAPE_PROBE')) {
       emit('tool_call', { tool_call_id: 'trun1', name: 'browser_run', args: { name: 'click', selector: '@e1' } });
       emit('tool_call', { tool_call_id: 'trun2', name: 'browser_run', args: { steps: [{ action: 'read', selector: 'h1' }] } });
@@ -436,6 +445,24 @@ async function main() {
   ok(runActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'browser_exec Python stays on the attached tab instead of failing');
   ok(runActions.some((msg) => msg.action?.name === 'evaluate' && msg.action?.params?.expression === 'document.title'), 'browser_exec JS expression is mirrored as evaluate');
   ok(!runActions.some((msg) => msg.action?.name === 'run' && !(msg.action?.params?.actions || []).length), 'empty run is not dispatched');
+
+  const beforeShape = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      attachPage: true,
+      attachedTab: { id: 42, url: 'https://example.com/attached', title: 'Attached' },
+      context: [{ type: 'page_context', url: 'https://example.com/attached', title: 'Attached', tabId: 42, document: '<h1>Hi</h1>' }],
+      messages: [{ role: 'user', content: 'TOOL_SHAPE_PROBE use the attached tab' }]
+    })
+  })).text();
+  const shapeActions = companionActions.slice(beforeShape);
+  ok(shapeActions.some((msg) => msg.action?.name === 'click' && String(msg.action?.params?.selector || '').includes('e1')), 'Hermes browser_click({ref}) is mirrored as click');
+  ok(shapeActions.some((msg) => msg.action?.name === 'type_into' && msg.action?.params?.text === 'hello'), 'Hermes browser_type({ref,text}) is mirrored as type_into');
+  ok(shapeActions.some((msg) => msg.action?.name === 'evaluate' && msg.action?.params?.expression === 'document.title'), 'browser_console({expression}) is mirrored as evaluate');
+  ok(shapeActions.some((msg) => msg.action?.name === 'screenshot'), 'browser_vision is mirrored as a screenshot of the attached tab');
 
   const conflict = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',

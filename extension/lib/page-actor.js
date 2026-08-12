@@ -18,16 +18,46 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
+const INTERACTIVE_SEL = 'a,button,input,select,textarea,summary,details,[role="button"],[role="link"],[contenteditable="true"]';
+
 function refSelector(value) {
   const match = String(value || '').trim().match(/^@?(e\d+)$/i);
   return match ? `[data-hermes-ref="${match[1]}"]` : '';
 }
 
-function el(selector, root = document) {
-  if (typeof Element !== 'undefined' && selector instanceof Element) return selector;
-  const raw = String(selector || '').trim();
-  if (!raw) return null;
+function refIndex(value) {
+  const match = String(value || '').trim().match(/^@?e(\d+)$/i);
+  return match ? Number(match[1]) : 0;
+}
 
+function restampRefs(root = document) {
+  const reader = globalThis.HermesPageReader;
+  if (reader && typeof reader.readPage === 'function') {
+    try { reader.readPage(); return; } catch {}
+  }
+  const nodes = Array.from(root.querySelectorAll(INTERACTIVE_SEL)).filter((node) => {
+    if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
+    const box = node.getBoundingClientRect();
+    return box.width > 0 || box.height > 0;
+  });
+  nodes.forEach((node, index) => {
+    try { node.setAttribute('data-hermes-ref', `e${index + 1}`); } catch {}
+  });
+}
+
+function nodeLabel(node) {
+  return cleanText(
+    node.getAttribute('aria-label')
+    || node.getAttribute('placeholder')
+    || node.getAttribute('title')
+    || node.getAttribute('name')
+    || node.value
+    || node.textContent
+    || ''
+  );
+}
+
+function lookupEl(raw, root) {
   const ref = refSelector(raw);
   if (ref) {
     const byRef = root.querySelector(ref);
@@ -39,14 +69,37 @@ function el(selector, root = document) {
     if (found) return found;
   } catch {}
 
-  const needle = raw.toLowerCase();
-  const candidates = Array.from(root.querySelectorAll(
-    'button,a,input,textarea,select,[role="button"],[role="link"],[role="textbox"],[contenteditable="true"]'
-  ));
-  return candidates.find((node) => {
-    const text = cleanText(node.textContent || node.value || node.getAttribute('aria-label') || node.getAttribute('title'));
-    return text.toLowerCase() === needle;
-  }) || null;
+  const index = refIndex(raw);
+  if (index > 0) {
+    const stamped = root.querySelector(`[data-hermes-ref="e${index}"]`);
+    if (stamped) return stamped;
+    const listed = Array.from(root.querySelectorAll(INTERACTIVE_SEL)).filter((node) => {
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
+      const box = node.getBoundingClientRect();
+      return box.width > 0 || box.height > 0;
+    });
+    if (listed[index - 1]) return listed[index - 1];
+  }
+
+  const needle = raw.replace(/^@/, '').toLowerCase();
+  if (!needle) return null;
+  const candidates = Array.from(root.querySelectorAll(INTERACTIVE_SEL));
+  return candidates.find((node) => nodeLabel(node).toLowerCase() === needle)
+    || candidates.find((node) => {
+      const text = nodeLabel(node).toLowerCase();
+      return text.includes(needle) || needle.includes(text);
+    })
+    || null;
+}
+
+function el(selector, root = document) {
+  if (typeof Element !== 'undefined' && selector instanceof Element) return selector;
+  const raw = String(selector || '').trim();
+  if (!raw) return null;
+  const first = lookupEl(raw, root);
+  if (first) return first;
+  restampRefs(root);
+  return lookupEl(raw, root);
 }
 
 function targetLabel(params = {}) {
@@ -342,6 +395,7 @@ function actionSearchDom(p = {}) {
 }
 
 function actionSnapshot() {
+  restampRefs();
   const interactive = Array.from(document.querySelectorAll('[data-hermes-ref]')).slice(0, 250).map((node) => ({
     ref: `@${node.getAttribute('data-hermes-ref')}`,
     tag: node.tagName.toLowerCase(),
@@ -882,7 +936,9 @@ async function runAction(action) {
       case 'back': return actionBack();
       case 'forward': return actionForward();
       case 'reload': case 'refresh': return actionReload();
-      default: return { ok: false, error: `Unknown action: ${name}` };
+      default:
+        if (!name || /snapshot|inspect|page/.test(name)) return actionSnapshot();
+        return { ok: false, error: `Unknown action: ${name}` };
     }
   } catch (e) {
     return { ok: false, error: `${name} failed: ${e.message}` };

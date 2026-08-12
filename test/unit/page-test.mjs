@@ -238,6 +238,12 @@ async function drive() {
   const missing = await actor.runAction({ name: 'click', params: { selector: '#does-not-exist' } });
   ok(!missing.ok, 'actor returns error for missing element');
 
+  for (const node of document.querySelectorAll('[data-hermes-ref]')) node.removeAttribute('data-hermes-ref');
+  const restamp = await actor.runAction({ name: 'click', params: { selector: '@e1' } });
+  ok(restamp.ok, 'actor restamps refs and clicks @e1 after they were cleared');
+  const fuzzy = await actor.runAction({ name: 'click', params: { selector: 'Buy' } });
+  ok(fuzzy.ok, 'actor clicks a control from a partial label');
+
   const batch = await actor.runActions([
     { name: 'read', params: { selector: 'body' } },
     { name: 'read', params: { selector: 'h1' } }

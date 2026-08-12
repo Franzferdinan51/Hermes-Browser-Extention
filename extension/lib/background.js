@@ -112,9 +112,7 @@ async function getPageTab(preferredId, opts = {}) {
   if (tryId != null) {
     const tab = await chrome.tabs.get(tryId).catch(() => null);
     if (tab?.id != null && !isRestrictedUrl(tab.url)) return tab;
-    if (opts.pinned) return null;
   }
-  if (opts.pinned) return null;
   const queries = [
     { active: true, lastFocusedWindow: true },
     { active: true, currentWindow: true }
@@ -210,7 +208,7 @@ function scheduleBridgeReconnect() {
   bridgeReconnectTimer = setTimeout(() => {
     bridgeReconnectTimer = null;
     connectBridgeWs();
-  }, 3000);
+  }, 800);
 }
 
 function connectBridgeWs() {
@@ -522,7 +520,6 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
     case 'downloads':
     case 'download':
     case 'cookies':
-    case 'console':
     case 'dialog':
     case 'handle_dialog':
     case 'zoom':
@@ -532,7 +529,14 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
     case 'topsites':
     case 'discard':
       return runChromeTool(name, params, tabId);
-    case 'screenshot': case 'capture': {
+    case 'console': {
+      const expr = params.expression || params.js || params.code;
+      if (looksLikeJsExpression(expr)) {
+        return runActionOnTab({ name: 'evaluate', params: { expression: expr } }, tabId, depth + 1);
+      }
+      return runChromeTool('console', params, tabId);
+    }
+    case 'screenshot': case 'capture': case 'vision': {
       try {
         const dataUrl = await chrome.tabs.captureVisibleTab(params.windowId || undefined, { format: params.format === 'jpeg' ? 'jpeg' : 'png', quality: Number(params.quality) || 90 });
         return { ok: true, value: { dataUrl, format: params.format === 'jpeg' ? 'jpeg' : 'png' } };
@@ -585,6 +589,10 @@ async function runActionOnTab(action, tabId, depth = 0) {
       target: { tabId },
       files: ['lib/page-reader.js', 'lib/page-actor.js', 'lib/content.js']
     }).catch(() => {});
+    resp = await chrome.tabs.sendMessage(tabId, { kind: 'run-action', action }).catch(() => null);
+  }
+  if (!resp) {
+    await new Promise((resolve) => setTimeout(resolve, 120));
     resp = await chrome.tabs.sendMessage(tabId, { kind: 'run-action', action }).catch(() => null);
   }
   return resp || { ok: false, error: 'Could not reach page (restricted browser page or content script unavailable)' };

@@ -150,9 +150,11 @@ export class HermesClient extends EventEmitter {
         model: this.model,
         model_provider: this.modelProvider,
         // Attached companion chats already have the live Chrome tab. Enabling
-        // Hermes' native browser toolset here launches a second browser and
-        // often never returns a reply.
-        enabled_toolsets: attached ? ['hermes-cli'] : ['hermes-cli', 'browser']
+        // Hermes' native browser / browser-use toolsets here launches a second
+        // browser (or fails those tools) while the companion is already acting.
+        enabled_toolsets: attached
+          ? ['hermes-cli', 'skills', 'memory', 'todo']
+          : undefined
       })
     });
     if (!r.ok) {
@@ -181,6 +183,9 @@ export class HermesClient extends EventEmitter {
       sessionId = await this._ensureSession({ attached: Boolean(extra.attached) });
     }
     this._sessionId = sessionId;
+    if (extra.attached && sessionId) {
+      await this.setSessionToolsets(sessionId, ['hermes-cli', 'skills', 'memory', 'todo']);
+    }
 
     let modelProvider = extra.modelProvider || this.modelProvider;
     let model = extra.model || this.model;
@@ -264,6 +269,20 @@ export class HermesClient extends EventEmitter {
       });
       if (this._streamId === id) this._streamId = null;
       return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async setSessionToolsets(sessionId, toolsets) {
+    const id = String(sessionId || '').trim();
+    if (!id || !Array.isArray(toolsets) || !toolsets.length) return false;
+    try {
+      await this.requestJson('/api/session/toolsets', {
+        method: 'POST',
+        body: { session_id: id, toolsets }
+      });
+      return true;
     } catch {
       return false;
     }
