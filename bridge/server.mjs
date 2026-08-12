@@ -239,7 +239,14 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_forward',
   'browser_reload',
   'browser_tabs',
-  'browser_windows'
+  'browser_windows',
+  'browser_tab_groups',
+  'browser_history',
+  'browser_downloads',
+  'browser_screenshot',
+  'browser_pdf',
+  'browser_upload',
+  'browser_run'
 ]);
 
 function isBrowserCompanionTool(name = '') {
@@ -306,6 +313,20 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'tabs', params: {} };
     case 'browser_windows':
       return { name: 'windows', params: {} };
+    case 'browser_tab_groups':
+      return { name: 'tab_groups', params: {} };
+    case 'browser_history':
+      return { name: 'history', params: args };
+    case 'browser_downloads':
+      return { name: 'downloads', params: args };
+    case 'browser_screenshot':
+      return { name: 'screenshot', params: args };
+    case 'browser_pdf':
+      return { name: 'pdf', params: args };
+    case 'browser_upload':
+      return { name: 'upload', params: args };
+    case 'browser_run':
+      return { name: 'run', params: args };
     default:
       return null;
   }
@@ -430,6 +451,9 @@ function buildHermesPrompt(input) {
       parts.push(
         `[PAGE CONTEXT]\nURL: ${ctx.url || ''}\nTITLE: ${ctx.title || ''}\n\n${ctx.document || ''}` +
         (ctx.accessibility ? `\n\n[ACCESSIBILITY SNAPSHOT]\n${ctx.accessibility}` : '') +
+        (ctx.signals?.length
+          ? `\n\n[PAGE STATUS SIGNALS]\n${ctx.signals.map((s) => `- ${s.hidden ? '[hidden] ' : ''}${s.role || 'signal'}: ${s.text || ''}`).join('\n')}`
+          : '') +
         (ctx.interactive?.length
           ? `\n\n[INTERACTIVE ELEMENTS]\n${ctx.interactive.map((i) => `- ${i.ref || ''} ${i.selector || ''} (${i.tag || ''}) ${i.text || i.value || i.placeholder || ''}`).join('\n')}`
           : '')
@@ -485,7 +509,14 @@ function buildHermesPrompt(input) {
     'browser_console()',
     'browser_vision()',
     'browser_tabs()',
-    'browser_windows()'
+    'browser_windows()',
+    'browser_tab_groups()',
+    'browser_history(query?, limit?)',
+    'browser_downloads(query?, limit?)',
+    'browser_screenshot(format?)',
+    'browser_pdf()',
+    'browser_upload(@eN, file)',
+    'browser_run(actions[])'
   ];
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +

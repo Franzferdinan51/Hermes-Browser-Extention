@@ -176,6 +176,22 @@ function summary(root = document) {
   return { text, headings: h1, forms, links, buttons: root.querySelectorAll('button').length, inputs: root.querySelectorAll('input,textarea,select').length, images: root.querySelectorAll('img').length };
 }
 
+function collectPageSignals(root = document) {
+  const out = [];
+  const seen = new Set();
+  const nodes = root.querySelectorAll('[aria-live],[role="alert"],[role="status"],[role="log"],[aria-label],[title],[hidden],[aria-hidden="true"]');
+  for (const node of nodes) {
+    const text = cleanText(node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent || '');
+    if (!text || seen.has(text)) continue;
+    const lower = text.toLowerCase();
+    if (node.getAttribute('aria-live') || ['alert','status','log'].includes(node.getAttribute('role')) || /reply|hidden|spam|muted|unread|filtered|blocked|message|notification|show more|load more/.test(lower)) {
+      seen.add(text);
+      out.push({ text: text.slice(0, 500), role: node.getAttribute('role') || '', live: node.getAttribute('aria-live') || '', hidden: node.hidden || node.getAttribute('aria-hidden') === 'true' });
+    }
+  }
+  return out.slice(0, 100);
+}
+
 /**
  * Snapshot the page. Returns the full structured context object.
  */
@@ -194,6 +210,7 @@ function readPage() {
     summary: s,
     interactive,
     accessibility,
+    signals: collectPageSignals(root),
     dom,
     capturedAt: Date.now()
   };

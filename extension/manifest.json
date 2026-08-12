@@ -10,6 +10,8 @@
     "activeTab",
     "scripting",
     "tabs",
+    "history",
+    "downloads",
     "clipboardWrite"
   ],
   "host_permissions": [

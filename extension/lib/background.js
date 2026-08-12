@@ -299,6 +299,7 @@ async function runNativeTabAction(name, params, tabId) {
           title: snap.title,
           document: String(snap.snapshot.dom || snap.snapshot.text || '').slice(0, maxChars),
           accessibility: String(snap.snapshot.accessibility || '').slice(0, maxChars),
+          signals: (snap.snapshot.signals || []).slice(0, 100),
           interactive: (snap.snapshot.interactive || []).slice(0, 250)
         }
       };
@@ -310,6 +311,35 @@ async function runNativeTabAction(name, params, tabId) {
     case 'windows': {
       const windows = await chrome.windows.getAll({ populate: false });
       return { ok: true, value: windows.map((win) => ({ id: win.id, focused: !!win.focused, state: win.state || '', type: win.type || '' })) };
+    }
+    case 'tab_groups': case 'tab-groups': {
+      const groups = await chrome.tabGroups?.query({}) || [];
+      return { ok: true, value: groups.map((group) => ({ id: group.id, title: group.title || '', color: group.color || '', collapsed: !!group.collapsed, windowId: group.windowId })) };
+    }
+    case 'history': {
+      const items = await chrome.history.search({ text: params.text || params.query || '', startTime: params.startTime, endTime: params.endTime, maxResults: Math.min(Number(params.limit) || 50, 200) });
+      return { ok: true, value: items.map((item) => ({ id: item.id, title: item.title || '', url: item.url || '', lastVisitTime: item.lastVisitTime || 0, visitCount: item.visitCount || 0 })) };
+    }
+    case 'downloads': case 'download': {
+      const items = await chrome.downloads.search({ query: params.query ? [String(params.query)] : undefined, limit: Math.min(Number(params.limit) || 50, 200) });
+      return { ok: true, value: items.map((item) => ({ id: item.id, filename: item.filename || '', url: item.url || '', state: item.state || '', bytesReceived: item.bytesReceived || 0, totalBytes: item.totalBytes || 0 })) };
+    }
+    case 'screenshot': case 'capture': {
+      const dataUrl = await chrome.tabs.captureVisibleTab(params.windowId || null, { format: params.format === 'jpeg' ? 'jpeg' : 'png', quality: Number(params.quality) || 90 });
+      return { ok: true, value: { dataUrl, format: params.format === 'jpeg' ? 'jpeg' : 'png' } };
+    }
+    case 'pdf': {
+      return { ok: false, error: 'PDF export requires the BrowserOS/CDP backend; Chrome MV3 does not expose tabs.printToPDF' };
+    }
+    case 'upload': {
+      return { ok: false, error: 'Upload requires a user-selected file; use the page file input or setInputFiles flow' };
+    }
+    case 'run': {
+      const actions = Array.isArray(params.actions) ? params.actions : [];
+      if (!actions.length) return { ok: false, error: 'run requires actions[]' };
+      const results = [];
+      for (const action of actions) results.push(await runActionOnTab(action, tabId));
+      return { ok: results.every((result) => result?.ok !== false), value: results };
     }
     default:
       return null;
@@ -370,6 +400,7 @@ async function chat(userText, opts = {}) {
         title: snapshot.title,
         document: doc.slice(0, maxDomChars),
         accessibility: snapshot.snapshot.accessibility || '',
+        signals: snapshot.snapshot.signals || [],
         interactive,
         time: Date.now()
       }];
