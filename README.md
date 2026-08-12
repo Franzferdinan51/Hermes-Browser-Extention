@@ -2,7 +2,7 @@
 
 A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-**Current release: 0.3.1**
+**Current release: 0.3.2**
 
 Sources and design references:
 
@@ -10,6 +10,22 @@ Sources and design references:
 - **AG-UI** — MIT — agent ↔ UI event protocol
 - **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
 - **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
+
+## What 0.3.2 adds
+
+Independently implemented from the **public BrowserOS MCP catalog** (docs.browseros.com). BrowserOS is AGPL-3.0; **no BrowserOS source was copied**.
+
+- Full **tab** control: list/create/close/switch/duplicate/pin/mute/move
+- Full **window** control: list/create/close/focus/update
+- Full **tab group** control: list/create/update/ungroup/close
+- **Bookmarks**: list/search/create/update/remove
+- **History**: search/recent/delete url or range
+- **Downloads**: list plus start/cancel/show a URL
+- **Cookies** for a chosen http(s) URL (current tab by default)
+- **Page extract**: markdown, links, HTML, CSS/text DOM search
+- **Console** capture and **dialog** accept/dismiss policy in the page
+- **Zoom** get/set/reset
+- Public catalog aliases such as `take_snapshot`, `new_page`, `get_page_content`, and `get_bookmarks` resolve to the same companion actions
 
 ## What 0.3.1 fixes
 
@@ -149,9 +165,9 @@ browser_press
 browser_get_images
 ```
 
-`browser_console` and `browser_vision` stay Hermes-native and still appear in the tool timeline when Hermes emits them; the extension does not pretend to implement them.
+`browser_vision` stays Hermes-native. The companion now implements a page-side `browser_console` hook (recent `console.*` and error events) instead of pretending to be Hermes's own console backend.
 
-The page actor also contains local compatibility helpers such as read/grep/hover/select/wait/forward/reload. Those helpers support extension internals and future companion tooling, but **they are not advertised to Hermes as registered core tools**.
+The page actor also contains local compatibility helpers such as read/grep/hover/select/wait/forward/reload plus page extract. Those helpers support extension internals and catalog-inspired tooling.
 
 Generic web tools such as `web_search` and `web_extract` are never treated as active-tab DOM commands.
 
@@ -165,9 +181,10 @@ BrowserOS has several strong browser-agent patterns. Because BrowserOS is AGPL-3
 - wait-for-condition behavior instead of arbitrary sleeps where possible,
 - explicit page/action ownership,
 - action lifecycle + result correlation,
-- snapshot → act → verify as the mental model.
+- snapshot → act → verify as the mental model,
+- a compact chrome-control catalog (tabs, windows, groups, bookmarks, history, downloads, cookies, extract).
 
-No BrowserOS source file was cherry-picked or copied.
+No BrowserOS source file was cherry-picked or copied. Hidden/background pages, print-to-PDF, and BrowserOS's 40+ app integrations stay out of this MIT extension.
 
 ## Bridge endpoints
 
@@ -199,7 +216,7 @@ Bridge test:
 cd bridge
 npm ci
 npm test
-# expected contract: 29 passed, 0 failed
+# expected contract: 31 passed, 0 failed
 ```
 
 The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.
@@ -210,7 +227,7 @@ Page reader/actor test:
 cd test
 npm ci
 npm test
-# expected contract: 31 passed, 0 failed
+# expected contract: 34 passed, 0 failed
 ```
 
 GitHub Actions runs both suites plus `node --check` over the extension modules. The workflow also supports a manual run from the Actions tab.

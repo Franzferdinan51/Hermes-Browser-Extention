@@ -202,6 +202,13 @@ async function drive() {
   const readRes = await actor.runAction({ name: 'read', params: { selector: 'h1' } });
   ok(readRes.ok && String(readRes.value).includes('Welcome'), 'actor reads element text');
 
+  const mdRes = await actor.runAction({ name: 'page_content', params: { format: 'markdown' } });
+  ok(mdRes.ok && String(mdRes.value).includes('# Welcome to the test page'), 'actor extracts page markdown');
+  const linkRes = await actor.runAction({ name: 'page_links', params: {} });
+  ok(linkRes.ok && linkRes.count >= 2 && linkRes.value.some((item) => String(item.href).includes('/about')), 'actor extracts page links');
+  const searchDom = await actor.runAction({ name: 'search_dom', params: { text: 'Buy Now' } });
+  ok(searchDom.ok && searchDom.count >= 1, 'actor searches DOM text');
+
   const missing = await actor.runAction({ name: 'click', params: { selector: '#does-not-exist' } });
   ok(!missing.ok, 'actor returns error for missing element');
 

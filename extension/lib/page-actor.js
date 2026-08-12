@@ -242,6 +242,105 @@ function actionGetImages(p = {}) {
   return { ok: true, value: images, count: images.length };
 }
 
+function actionPageLinks(p = {}) {
+  const limit = Math.min(Math.max(Number(p.limit) || 200, 1), 500);
+  const links = Array.from(document.querySelectorAll('a[href]')).slice(0, limit).map((node, index) => ({
+    index,
+    text: cleanText(node.textContent || node.getAttribute('aria-label') || '').slice(0, 200),
+    href: node.href || node.getAttribute('href') || '',
+    ref: node.getAttribute('data-hermes-ref') ? `@${node.getAttribute('data-hermes-ref')}` : undefined
+  }));
+  return { ok: true, value: links, count: links.length };
+}
+
+function toMarkdown(root = document.body) {
+  const lines = [];
+  const walk = (node, depth) => {
+    if (!node || node.nodeType !== 1 || lines.join('\n').length > OUTPUT_LIMIT) return;
+    const tag = node.tagName;
+    if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'].includes(tag)) return;
+    if (/^H[1-6]$/.test(tag)) {
+      const text = cleanText(node.textContent);
+      if (text) lines.push(`${'#'.repeat(Number(tag[1]))} ${text}`);
+      return;
+    }
+    if (tag === 'A' && node.href) {
+      const text = cleanText(node.textContent) || node.href;
+      lines.push(`[${text.slice(0, 180)}](${node.href})`);
+      return;
+    }
+    if (tag === 'LI') {
+      const text = cleanText(node.textContent).slice(0, 400);
+      if (text) lines.push(`${'  '.repeat(Math.max(0, depth))} - ${text}`);
+      return;
+    }
+    if (tag === 'PRE' || tag === 'CODE') {
+      const text = String(node.textContent || '').slice(0, 2000);
+      if (text.trim()) {
+        lines.push('```');
+        lines.push(text);
+        lines.push('```');
+      }
+      return;
+    }
+    if (tag === 'P' || tag === 'BLOCKQUOTE' || tag === 'FIGCAPTION') {
+      const text = cleanText(node.textContent);
+      if (text) lines.push(tag === 'BLOCKQUOTE' ? `> ${text}` : text);
+      return;
+    }
+    for (const child of node.children || []) walk(child, depth + (tag === 'UL' || tag === 'OL' ? 1 : 0));
+  };
+  walk(root, 0);
+  if (!lines.length) lines.push(cleanText(root?.innerText || '').slice(0, OUTPUT_LIMIT));
+  return lines.join('\n').slice(0, OUTPUT_LIMIT);
+}
+
+function actionPageContent(p = {}) {
+  const format = String(p.format || p.as || 'markdown').toLowerCase();
+  if (format === 'html' || format === 'dom') return actionPageDom(p);
+  if (format === 'links') return actionPageLinks(p);
+  if (format === 'text') {
+    const text = String(document.body?.innerText || '').slice(0, OUTPUT_LIMIT);
+    return { ok: true, value: text, truncated: String(document.body?.innerText || '').length > OUTPUT_LIMIT };
+  }
+  const value = toMarkdown(document.body);
+  return { ok: true, value, truncated: value.length >= OUTPUT_LIMIT };
+}
+
+function actionPageDom(p = {}) {
+  const html = String(document.documentElement?.outerHTML || '').slice(0, OUTPUT_LIMIT);
+  return {
+    ok: true,
+    value: html,
+    truncated: String(document.documentElement?.outerHTML || '').length > OUTPUT_LIMIT
+  };
+}
+
+function actionSearchDom(p = {}) {
+  const selector = String(p.selector || p.css || '').trim();
+  const text = String(p.text || p.query || p.pattern || '').trim();
+  const limit = Math.min(Math.max(Number(p.limit) || 50, 1), 200);
+  let nodes = [];
+  if (selector) {
+    try { nodes = Array.from(document.querySelectorAll(selector)); }
+    catch (e) { return { ok: false, error: `invalid selector: ${e.message}` }; }
+  } else if (text) {
+    const needle = text.toLowerCase();
+    nodes = Array.from(document.querySelectorAll('a,button,h1,h2,h3,h4,p,li,label,td,th,span,div')).filter((node) => {
+      return cleanText(node.textContent || '').toLowerCase().includes(needle);
+    });
+  } else {
+    return { ok: false, error: 'search_dom requires selector or text' };
+  }
+  const value = nodes.slice(0, limit).map((node, index) => ({
+    index,
+    tag: node.tagName.toLowerCase(),
+    ref: node.getAttribute('data-hermes-ref') ? `@${node.getAttribute('data-hermes-ref')}` : undefined,
+    text: cleanText(node.textContent || node.value || '').slice(0, 240)
+  }));
+  return { ok: true, value, count: value.length };
+}
+
 function actionSnapshot() {
   const interactive = Array.from(document.querySelectorAll('[data-hermes-ref]')).slice(0, 250).map((node) => ({
     ref: `@${node.getAttribute('data-hermes-ref')}`,
@@ -249,10 +348,12 @@ function actionSnapshot() {
     role: node.getAttribute('role') || '',
     text: cleanText(node.textContent || node.value || node.getAttribute('aria-label') || '').slice(0, 300)
   }));
+  const headings = Array.from(document.querySelectorAll('h1,h2,h3')).map((node) => cleanText(node.textContent)).filter(Boolean).slice(0, 30);
+  const links = actionPageLinks({ limit: 40 }).value;
   const text = String(document.body?.innerText || '').slice(0, OUTPUT_LIMIT);
   return {
     ok: true,
-    value: { url: location.href, title: document.title, text, interactive },
+    value: { url: location.href, title: document.title, text, headings, links, interactive },
     truncated: String(document.body?.innerText || '').length > OUTPUT_LIMIT
   };
 }
@@ -501,6 +602,10 @@ async function runAction(action) {
       case 'diff': case 'changed': return actionDiff(p);
       case 'evaluate': case 'eval': case 'js': return actionEvaluate(p);
       case 'get_images': case 'images': return actionGetImages(p);
+      case 'page_content': case 'pagecontent': case 'markdown': case 'get_page_content': return actionPageContent(p);
+      case 'page_links': case 'links': case 'get_page_links': return actionPageLinks(p);
+      case 'page_dom': case 'dom': case 'get_dom': case 'html': return actionPageDom(p);
+      case 'search_dom': case 'searchdom': return actionSearchDom(p);
       case 'snapshot': return actionSnapshot();
       case 'wait': return await actionWait(p);
       case 'navigate': case 'goto': case 'open': return actionNavigate(p);

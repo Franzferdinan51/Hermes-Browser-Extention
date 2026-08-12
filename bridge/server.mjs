@@ -293,15 +293,79 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_screenshot',
   'browser_pdf',
   'browser_upload',
-  'browser_run'
+  'browser_run',
+  'browser_bookmarks',
+  'browser_cookies',
+  'browser_console',
+  'browser_dialog',
+  'browser_page_content',
+  'browser_links',
+  'browser_dom',
+  'browser_search_dom',
+  'browser_zoom',
+  'browser_new_page',
+  'browser_close_page',
+  'browser_switch_tab',
+  'browser_active_tab'
 ]);
 
+// Public BrowserOS MCP catalog names → companion actions. Ideas only, no source.
+const TOOL_ALIASES = {
+  navigate_page: 'browser_navigate',
+  new_page: 'browser_new_page',
+  close_page: 'browser_close_page',
+  list_pages: 'browser_tabs',
+  show_page: 'browser_switch_tab',
+  get_active_page: 'browser_active_tab',
+  move_page: 'browser_tabs',
+  take_snapshot: 'browser_snapshot',
+  take_enhanced_snapshot: 'browser_snapshot',
+  get_page_content: 'browser_page_content',
+  get_page_links: 'browser_links',
+  get_dom: 'browser_dom',
+  search_dom: 'browser_search_dom',
+  take_screenshot: 'browser_screenshot',
+  evaluate_script: 'browser_evaluate',
+  press_key: 'browser_press',
+  upload_file: 'browser_upload',
+  handle_dialog: 'browser_dialog',
+  save_pdf: 'browser_pdf',
+  save_screenshot: 'browser_screenshot',
+  download_file: 'browser_downloads',
+  list_windows: 'browser_windows',
+  create_window: 'browser_windows',
+  close_window: 'browser_windows',
+  activate_window: 'browser_windows',
+  list_tab_groups: 'browser_tab_groups',
+  group_tabs: 'browser_tab_groups',
+  update_tab_group: 'browser_tab_groups',
+  ungroup_tabs: 'browser_tab_groups',
+  close_tab_group: 'browser_tab_groups',
+  get_bookmarks: 'browser_bookmarks',
+  create_bookmark: 'browser_bookmarks',
+  remove_bookmark: 'browser_bookmarks',
+  update_bookmark: 'browser_bookmarks',
+  search_bookmarks: 'browser_bookmarks',
+  search_history: 'browser_history',
+  get_recent_history: 'browser_history',
+  delete_history_url: 'browser_history',
+  delete_history_range: 'browser_history',
+  act: 'browser_act'
+};
+
+function canonicalToolName(name = '') {
+  const raw = String(name || '').trim().toLowerCase();
+  return TOOL_ALIASES[raw] || raw;
+}
+
 function isBrowserCompanionTool(name = '') {
-  return MIRRORABLE_BROWSER_TOOLS.has(String(name || '').trim().toLowerCase());
+  const n = canonicalToolName(name);
+  return n === 'browser_act' || MIRRORABLE_BROWSER_TOOLS.has(n);
 }
 
 function normalizeBrowserTool(name, args = {}) {
-  const n = String(name || '').toLowerCase();
+  const raw = String(name || '').trim().toLowerCase();
+  const n = canonicalToolName(raw);
   const selector = args.selector || args.element || args.ref || args.target;
   switch (n) {
     case 'browser_navigate':
@@ -357,15 +421,41 @@ function normalizeBrowserTool(name, args = {}) {
     case 'browser_reload':
       return { name: 'reload', params: {} };
     case 'browser_tabs':
-      return { name: 'tabs', params: {} };
+      return { name: 'tabs', params: args };
+    case 'browser_new_page':
+      return { name: 'tabs', params: { action: 'create', ...args } };
+    case 'browser_close_page':
+      return { name: 'tabs', params: { action: 'close', ...args } };
+    case 'browser_switch_tab':
+      return { name: 'tabs', params: { action: 'switch', ...args } };
+    case 'browser_active_tab':
+      return { name: 'tabs', params: { action: 'get_active', ...args } };
     case 'browser_windows':
-      return { name: 'windows', params: {} };
+      return { name: 'windows', params: args.action ? args : { action: inferWindowAction(raw, args), ...args } };
     case 'browser_tab_groups':
-      return { name: 'tab_groups', params: {} };
+      return { name: 'tab_groups', params: args.action ? args : { action: inferGroupAction(raw, args), ...args } };
     case 'browser_history':
-      return { name: 'history', params: args };
+      return { name: 'history', params: args.action ? args : { action: inferHistoryAction(raw, args), ...args } };
     case 'browser_downloads':
-      return { name: 'downloads', params: args };
+      return { name: 'downloads', params: args.action ? args : { action: raw === 'download_file' ? 'start' : 'list', ...args } };
+    case 'browser_bookmarks':
+      return { name: 'bookmarks', params: args.action ? args : { action: inferBookmarkAction(raw, args), ...args } };
+    case 'browser_cookies':
+      return { name: 'cookies', params: args };
+    case 'browser_console':
+      return { name: 'console', params: args };
+    case 'browser_dialog':
+      return { name: 'dialog', params: args };
+    case 'browser_page_content':
+      return { name: 'page_content', params: args };
+    case 'browser_links':
+      return { name: 'page_links', params: args };
+    case 'browser_dom':
+      return { name: 'page_dom', params: args };
+    case 'browser_search_dom':
+      return { name: 'search_dom', params: args };
+    case 'browser_zoom':
+      return { name: 'zoom', params: args };
     case 'browser_screenshot':
       return { name: 'screenshot', params: args };
     case 'browser_pdf':
@@ -374,9 +464,48 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'upload', params: args };
     case 'browser_run':
       return { name: 'run', params: args };
+    case 'browser_act': {
+      const actName = args.name || args.action || args.tool;
+      if (!actName || !isBrowserCompanionTool(actName) || canonicalToolName(actName) === 'browser_act') return null;
+      return normalizeBrowserTool(actName, args.params || args.payload || args);
+    }
     default:
       return null;
   }
+}
+
+function inferWindowAction(name, args) {
+  const raw = String(name || '').toLowerCase();
+  if (raw === 'create_window') return 'create';
+  if (raw === 'close_window') return 'close';
+  if (raw === 'activate_window') return 'focus';
+  return 'list';
+}
+
+function inferGroupAction(name, args) {
+  const raw = String(name || '').toLowerCase();
+  if (raw === 'group_tabs' || args.tabIds) return 'create';
+  if (raw === 'update_tab_group') return 'update';
+  if (raw === 'ungroup_tabs') return 'ungroup';
+  if (raw === 'close_tab_group') return 'close';
+  return 'list';
+}
+
+function inferHistoryAction(name, args) {
+  const raw = String(name || '').toLowerCase();
+  if (raw === 'get_recent_history') return 'recent';
+  if (raw === 'delete_history_url') return 'delete_url';
+  if (raw === 'delete_history_range') return 'delete_range';
+  return 'search';
+}
+
+function inferBookmarkAction(name, args) {
+  const raw = String(name || '').toLowerCase();
+  if (raw === 'create_bookmark' || (args.title && args.url && !args.id)) return 'create';
+  if (raw === 'remove_bookmark') return 'remove';
+  if (raw === 'update_bookmark') return 'update';
+  if (raw === 'search_bookmarks' || args.query) return 'search';
+  return 'list';
 }
 
 async function runAgent(threadId, runId, input, res) {
@@ -554,13 +683,21 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_wait(selector?, text?, timeout?)',
     'browser_get_images(limit?)',
     'browser_evaluate(expression)',
-    'browser_console()',
+    'browser_console(level?, limit?)',
     'browser_vision()',
-    'browser_tabs()',
-    'browser_windows()',
-    'browser_tab_groups()',
-    'browser_history(query?, limit?)',
-    'browser_downloads(query?, limit?)',
+    'browser_tabs(action=list|create|close|switch|duplicate|pin|mute|move, tabId?, url?)',
+    'browser_windows(action=list|create|close|focus|update, windowId?, url?)',
+    'browser_tab_groups(action=list|create|update|ungroup|close, tabIds?, title?)',
+    'browser_history(action=search|recent|delete_url|delete_range, query?, url?)',
+    'browser_downloads(action=list|start|cancel|show, url?, id?)',
+    'browser_bookmarks(action=list|search|create|update|remove, query?, title?, url?)',
+    'browser_cookies(action=list|get|set|remove, url?, name?)',
+    'browser_page_content(format=markdown|text|html|links)',
+    'browser_links(limit?)',
+    'browser_dom()',
+    'browser_search_dom(selector?, text?)',
+    'browser_dialog(action=accept|dismiss|observe, text?)',
+    'browser_zoom(action=get|set|reset, factor?)',
     'browser_screenshot(format?)',
     'browser_pdf()',
     'browser_upload(@eN, file)',
@@ -703,7 +840,7 @@ const server = http.createServer(async (req, res) => {
       wsClients: wsClients.size,
       pendingBrowserActions: pendingToolResults.size,
       authRequired: Boolean(cfg.authToken),
-      version: '0.3.1'
+      version: '0.3.2'
     });
     return;
   }

@@ -6,6 +6,7 @@
  */
 
 import { AGUIClient } from './agui-client.js';
+import { runChromeTool } from './browser-chrome.js';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8965',
@@ -317,37 +318,28 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
           document: String(snap.snapshot.dom || snap.snapshot.text || '').slice(0, maxChars),
           accessibility: String(snap.snapshot.accessibility || '').slice(0, maxChars),
           signals: (snap.snapshot.signals || []).slice(0, 100),
-          interactive: (snap.snapshot.interactive || []).slice(0, 250)
+          interactive: (snap.snapshot.interactive || []).slice(0, 250),
+          headings: snap.snapshot.summary?.headings || snap.snapshot.headings || [],
+          links: (snap.snapshot.links || snap.snapshot.interactive || []).filter((item) => item.href).slice(0, 80)
         }
       };
     }
-    case 'tabs': {
-      const tabs = await chrome.tabs.query({});
-      return { ok: true, value: tabs.map((tab) => ({ id: tab.id, windowId: tab.windowId, active: !!tab.active, title: tab.title || '', url: tab.url || '' })) };
-    }
-    case 'windows': {
-      const windows = await chrome.windows.getAll({ populate: false });
-      return { ok: true, value: windows.map((win) => ({ id: win.id, focused: !!win.focused, state: win.state || '', type: win.type || '' })) };
-    }
-    case 'tab_groups': case 'tab-groups': {
-      if (!chrome.tabGroups?.query) return { ok: false, error: 'tabGroups API is unavailable in this browser' };
-      try {
-        const groups = await chrome.tabGroups.query({});
-        return { ok: true, value: groups.map((group) => ({ id: group.id, title: group.title || '', color: group.color || '', collapsed: !!group.collapsed, windowId: group.windowId })) };
-      } catch (e) {
-        return { ok: false, error: `tab groups unavailable: ${e.message}` };
-      }
-    }
-    case 'history': {
-      if (!chrome.history?.search) return { ok: false, error: 'history permission is not granted' };
-      const items = await chrome.history.search({ text: params.text || params.query || '', startTime: params.startTime, endTime: params.endTime, maxResults: Math.min(Number(params.limit) || 50, 200) });
-      return { ok: true, value: items.map((item) => ({ id: item.id, title: item.title || '', url: item.url || '', lastVisitTime: item.lastVisitTime || 0, visitCount: item.visitCount || 0 })) };
-    }
-    case 'downloads': case 'download': {
-      if (!chrome.downloads?.search) return { ok: false, error: 'downloads permission is not granted' };
-      const items = await chrome.downloads.search({ query: params.query ? [String(params.query)] : undefined, limit: Math.min(Number(params.limit) || 50, 200) });
-      return { ok: true, value: items.map((item) => ({ id: item.id, filename: item.filename || '', url: item.url || '', state: item.state || '', bytesReceived: item.bytesReceived || 0, totalBytes: item.totalBytes || 0 })) };
-    }
+    case 'tabs':
+    case 'pages':
+    case 'windows':
+    case 'tab_groups':
+    case 'tab-groups':
+    case 'tabgroups':
+    case 'bookmarks':
+    case 'history':
+    case 'downloads':
+    case 'download':
+    case 'cookies':
+    case 'console':
+    case 'dialog':
+    case 'handle_dialog':
+    case 'zoom':
+      return runChromeTool(name, params, tabId);
     case 'screenshot': case 'capture': {
       try {
         const dataUrl = await chrome.tabs.captureVisibleTab(params.windowId || undefined, { format: params.format === 'jpeg' ? 'jpeg' : 'png', quality: Number(params.quality) || 90 });

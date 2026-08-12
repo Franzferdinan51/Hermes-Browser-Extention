@@ -57,6 +57,7 @@ const fake = http.createServer(async (req, res) => {
     emit('token', { text: 'from ' });
     emit('tool_call', { tool_call_id: 't1', name: 'browser_click', args: { element: '@e1' } });
     emit('tool_call', { tool_call_id: 't2', name: 'web_search', args: { query: 'example' } });
+    emit('tool_call', { tool_call_id: 't3', name: 'get_page_content', args: { format: 'markdown' } });
     emit('token', { text: 'Hermes!' });
     emit('done', {});
     res.end();
@@ -178,7 +179,7 @@ async function main() {
     hz = { error: e.message };
   }
   ok(hz.ok === true && hz.hermesOk === true, 'healthz reports Hermes reachable');
-  ok(hz.version === '0.3.1' && hz.authRequired === true, 'healthz exposes secured bridge version');
+  ok(hz.version === '0.3.2' && hz.authRequired === true, 'healthz exposes secured bridge version');
 
   // Model discovery.
   let models = {};
@@ -233,6 +234,7 @@ async function main() {
   ok(body.includes('"phase":"reasoning"'), 'surfaces reasoning lifecycle without raw reasoning');
   ok(!body.includes('private reasoning should not be surfaced'), 'does not leak raw Hermes reasoning text');
   ok(body.includes('"phase":"browser"'), 'mirrorable browser tool is dispatched to companion');
+  ok(companionActions.some((msg) => msg.action?.name === 'page_content' && msg.action?.params?.format === 'markdown'), 'BrowserOS catalog alias get_page_content is mirrored independently');
   ok(body.includes('"kind":"tool-result"') && body.includes('Fake active tab'), 'companion result is returned in AG-UI stream');
   ok(body.indexOf('"TOOL_CALL_START"') >= 0 && body.indexOf('"TOOL_CALL_START"') < body.indexOf('"kind":"tool-result"'), 'tool cards start before companion results arrive');
   ok(!body.includes('No Hermes Browser companion is connected","requestId":"web_search'), 'generic web_search is not routed into active-tab DOM execution');
@@ -267,8 +269,9 @@ async function main() {
   const isolatedPrompt = String(lastChatStartPayload?.message || '');
   ok(!isolatedPrompt.includes('[VERIFIED ACTIVE TAB RESULTS]'), 'a new thread does not inherit another conversation\'s tab results');
 
-  ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console()') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
-  ok(firstChatPrompt.includes('browser_check(@eN)') && firstChatPrompt.includes('browser_evaluate(expression)') && firstChatPrompt.includes('browser_tabs()'), 'prompt advertises expanded BrowserOS-parity tools');
+  ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console(') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
+  ok(firstChatPrompt.includes('browser_check(@eN)') && firstChatPrompt.includes('browser_evaluate(expression)') && firstChatPrompt.includes('browser_tabs(action='), 'prompt advertises expanded BrowserOS-parity tools');
+  ok(firstChatPrompt.includes('browser_bookmarks(') && firstChatPrompt.includes('browser_page_content(') && firstChatPrompt.includes('browser_cookies('), 'prompt advertises catalog-inspired chrome tools');
 
   console.log(`\n[${passed} passed, ${failed} failed]`);
   companion.close();

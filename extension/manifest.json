@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Hermes Agent — Browser Companion",
   "short_name": "Hermes",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Connect Hermes to the browser over AG-UI with live toolset/skill discovery, page context, rich streaming responses, and correlated DOM actions.",
   "permissions": [
     "sidePanel",
@@ -11,11 +11,14 @@
     "scripting",
     "tabs",
     "tabGroups",
+    "bookmarks",
+    "cookies",
     "history",
     "downloads",
     "clipboardWrite"
   ],
   "host_permissions": [
+    "<all_urls>",
     "http://127.0.0.1:8965/*",
     "http://localhost:8965/*",
     "ws://127.0.0.1:8965/*",
