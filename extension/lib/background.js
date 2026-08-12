@@ -5,7 +5,7 @@
  * browser-tool execution, Hermes runtime discovery, and UI event relaying.
  */
 
-import { AGUIClient, isLiveGeneration } from './agui-client.js';
+import { AGUIClient, abortActiveRun, leftoverAbortedResult } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
 import { readThreadId } from './thread.js';
 
@@ -468,23 +468,24 @@ async function runActionOnTab(action, tabId, depth = 0) {
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
+let currentSendToken = null;
+
 function announceRunEnd(generation, payload) {
-  if (!isLiveGeneration(generation, client?.activeGeneration)) return false;
-  emit('run-end', payload);
+  if (!leftoverAbortedResult(generation, client?.activeGeneration).announce) return false;
+  emit('run-end', { ...payload, sendToken: payload.sendToken ?? currentSendToken });
   return true;
 }
 
 function abortedResult(generation) {
-  if (!isLiveGeneration(generation, client?.activeGeneration)) return { aborted: true };
-  client.busy = false;
-  client.cancelRequested = false;
-  client.abort = null;
-  announceRunEnd(generation, { ok: false, aborted: true, error: 'stopped' });
+  const leftover = leftoverAbortedResult(generation, client?.activeGeneration);
+  if (!leftover.announce) return { aborted: true };
+  announceRunEnd(generation, { ok: false, aborted: true, error: 'stopped', sendToken: currentSendToken });
   return { aborted: true };
 }
 
 async function chat(userText, opts = {}) {
   if (!client) client = await buildClient();
+  if (opts.sendToken != null) currentSendToken = opts.sendToken;
   const generation = client.prepareRun();
   if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) connectBridgeWs();
   if (client.wasCanceled(generation)) return abortedResult(generation);
@@ -597,9 +598,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'abort-run': {
-      const aborted = client?.abortRun ? client.abortRun(client.activeGeneration) : false;
-      emit('run-end', { ok: false, aborted: Boolean(aborted), error: 'stopped' });
-      sendResponse({ ok: true, aborted: Boolean(aborted) });
+      const stopped = abortActiveRun(client);
+      if (stopped.announce) {
+        emit('run-end', { ok: false, aborted: stopped.aborted, error: 'stopped', sendToken: currentSendToken });
+      }
+      sendResponse({ ok: true, aborted: stopped.aborted, sendToken: currentSendToken });
       return true;
     }
     case 'read-page': {
@@ -709,7 +712,7 @@ function relayToPorts(type, payload) {
 }
 relay.addEventListener('agui-event', (e) => relayToPorts('event', { event: e.detail }));
 relay.addEventListener('run-start', (e) => relayToPorts('run-start', { text: e.detail.userText }));
-relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, aborted: e.detail.aborted, error: e.detail.error }));
+relay.addEventListener('run-end', (e) => relayToPorts('run-end', { ok: e.detail.ok, aborted: e.detail.aborted, error: e.detail.error, sendToken: e.detail.sendToken }));
 relay.addEventListener('page-snapshot', (e) => relayToPorts('page-snapshot', { snapshot: e.detail }));
 relay.addEventListener('page-context-status', (e) => relayToPorts('page-context-status', e.detail));
 relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.detail));

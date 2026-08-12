@@ -241,8 +241,9 @@ async function drive() {
   ok(started === 'thread_live', 'readThreadId extracts RUN_STARTED thread');
   const ignored = readThreadId({ type: 'RUN_FINISHED', threadId: 'thread_live' });
   ok(ignored === '', 'readThreadId ignores non-start events');
-  const payload = buildChatRequest('follow up', { threadId: 'thread_live' }, { attachPage: true });
+  const payload = buildChatRequest('follow up', { threadId: 'thread_live' }, { attachPage: true, sendToken: 7 });
   ok(payload.kind === 'chat' && payload.threadId === 'thread_live' && payload.text === 'follow up', 'buildChatRequest keeps the live thread on the next chat');
+  ok(payload.sendToken === 7, 'buildChatRequest forwards the send token for run-end matching');
 }
 await drive().catch((e) => { console.error('drive error', e.message); failed++; });
 

@@ -77,6 +77,29 @@ export function shouldIdleComposer(sendToken, liveSendToken) {
 }
 
 /**
+ * Shipped Stop handler. Aborts the live generation and invalidates it so a
+ * leftover abortedResult/run-end from A cannot announce after (or instead of) B.
+ */
+export function abortActiveRun(client) {
+  const generation = client?.activeGeneration ?? 0;
+  const aborted = Boolean(client?.abortRun?.(generation));
+  return {
+    aborted,
+    generation,
+    activeGeneration: client?.activeGeneration ?? 0,
+    announce: isLiveGeneration(generation, client?.activeGeneration)
+  };
+}
+
+/** Leftover chat A after Stop: announce only if that generation is still live. */
+export function leftoverAbortedResult(generation, activeGeneration) {
+  return {
+    aborted: true,
+    announce: isLiveGeneration(generation, activeGeneration)
+  };
+}
+
+/**
  * AGUIClient — connects to an AG-UI compatible agent endpoint (local Hermes
  * bridge or BrowserOS) and streams events.
  *
@@ -213,6 +236,11 @@ export class AGUIClient extends Emitter {
     if (generation != null && generation !== this.activeGeneration) return false;
     this.cancelRequested = true;
     if (this.abort) this.abort.abort();
+    // Invalidate this generation so leftover A is no longer live, even before B's prepareRun.
+    this.runGeneration += 1;
+    this.activeGeneration = this.runGeneration;
+    this.busy = false;
+    this.abort = null;
     return true;
   }
 

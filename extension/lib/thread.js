@@ -16,7 +16,8 @@ export function buildChatRequest(text, state = {}, extra = {}) {
     threadId: threadId || undefined,
     attachPage: extra.attachPage,
     model: extra.model,
-    modelProvider: extra.modelProvider
+    modelProvider: extra.modelProvider,
+    sendToken: extra.sendToken
   };
 }
 

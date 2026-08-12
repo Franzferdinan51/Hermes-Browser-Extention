@@ -513,14 +513,12 @@ function handleEvent(e) {
       flushText();
       finalizeStream();
       finalizeOpenTools(true);
-      idleComposer(undefined, 'done');
       setTimeout(() => { if (!busy) runLabel(''); }, 1400);
       break;
     case 'RUN_ERROR':
       flushText();
       finalizeStream();
       finalizeOpenTools(false, e.error || e.message);
-      idleComposer(undefined, 'error');
       showError(e.error || e.message || 'unknown');
       break;
     default:
@@ -539,11 +537,12 @@ function setComposerBusy(on, label) {
 }
 
 function idleComposer(sendToken, label) {
-  if (shouldIdleComposer(sendToken || liveSend, liveSend)) setComposerBusy(false, label);
+  if (shouldIdleComposer(sendToken, liveSend)) setComposerBusy(false, label);
 }
 
 async function stopRun() {
   if (!busy) return;
+  const sendToken = liveSend;
   runLabel('Stopping…');
   const response = await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
   if (!abortSucceeded(response)) {
@@ -553,7 +552,7 @@ async function stopRun() {
   flushText();
   finalizeStream();
   finalizeOpenTools(false, 'stopped');
-  idleComposer(undefined, 'stopped');
+  idleComposer(sendToken, 'stopped');
 }
 
 function setStatus(state) {
@@ -578,13 +577,15 @@ function connectPort() {
     } else if (m.kind === 'run-start') {
       setComposerBusy(true, 'Thinking…');
     } else if (m.kind === 'run-end') {
-      if (m.aborted) {
-        flushText();
-        finalizeStream();
-        finalizeOpenTools(false, 'stopped');
-        idleComposer(undefined, 'stopped');
-      } else {
-        idleComposer(undefined, m.ok === false ? 'error' : 'done');
+      if (shouldIdleComposer(m.sendToken, liveSend)) {
+        if (m.aborted) {
+          flushText();
+          finalizeStream();
+          finalizeOpenTools(false, 'stopped');
+          idleComposer(m.sendToken, 'stopped');
+        } else {
+          idleComposer(m.sendToken, m.ok === false ? 'error' : 'done');
+        }
       }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
       updatePageBar();
@@ -741,7 +742,8 @@ async function send() {
     const response = await chrome.runtime.sendMessage(buildChatRequest(text, { threadId }, {
       attachPage: $('autoSnap').checked,
       model: selectedModelId || config?.model || '',
-      modelProvider: selectedProvider || config?.modelProvider || ''
+      modelProvider: selectedProvider || config?.modelProvider || '',
+      sendToken
     }));
     if (response?.aborted) {
       idleComposer(sendToken, 'stopped');
@@ -756,7 +758,7 @@ async function send() {
     showError(e);
     idleComposer(sendToken, 'error');
   } finally {
-    if (shouldIdleComposer(sendToken || liveSend, liveSend)) setComposerBusy(false);
+    if (shouldIdleComposer(sendToken, liveSend)) setComposerBusy(false);
   }
 }
 

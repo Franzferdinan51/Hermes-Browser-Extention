@@ -59,8 +59,8 @@ async function send() {
   $('prompt').value = '';
   appendMsg('user', text);
   setPopupBusy(true, 'running…');
-  const r = await chrome.runtime.sendMessage({ kind: 'chat', text }).catch((e) => ({ ok: false, error: String(e) }));
-  if (!shouldIdleComposer(sendToken || liveSend, liveSend)) return;
+  const r = await chrome.runtime.sendMessage({ kind: 'chat', text, sendToken }).catch((e) => ({ ok: false, error: String(e) }));
+  if (!shouldIdleComposer(sendToken, liveSend)) return;
   if (r?.aborted) {
     setPopupBusy(false, 'stopped');
     return;
@@ -78,9 +78,10 @@ async function send() {
 }
 
 $('btnStop').addEventListener('click', async () => {
+  const sendToken = liveSend;
   const response = await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
   if (!abortSucceeded(response)) return;
-  if (shouldIdleComposer(liveSend, liveSend)) setPopupBusy(false, 'stopped');
+  if (shouldIdleComposer(sendToken, liveSend)) setPopupBusy(false, 'stopped');
 });
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
