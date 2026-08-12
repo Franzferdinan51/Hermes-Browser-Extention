@@ -113,7 +113,7 @@ export class HermesClient extends EventEmitter {
           enabled: true,
           configured: true,
           source: 'bridge-fallback',
-          tools: ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_scroll', 'browser_back', 'browser_press', 'browser_get_images', 'browser_tabs', 'browser_bookmarks', 'browser_page_content']
+          tools: ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_scroll', 'browser_back', 'browser_press', 'browser_get_images', 'browser_vision', 'browser_console', 'browser_cdp', 'browser_dialog', 'browser_exec']
         }]
       : toolsets;
     const enabledToolsets = effectiveToolsets.filter((row) => row?.enabled !== false);

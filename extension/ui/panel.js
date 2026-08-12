@@ -366,10 +366,12 @@ function renderRuntime(runtime) {
     ? Number(summary.tools)
     : enabledToolsets.reduce((sum, row) => sum + (Array.isArray(row?.tools) ? row.tools.length : 0), 0);
 
-  const companionTools = Number(summary.companionTools);
-  const companionNote = Number.isFinite(companionTools) && companionTools > 0 ? ` · ${companionTools} companion` : '';
-  $('runtimeSummary').textContent = `${enabledToolsets.length} sets · ${toolCount} tools${companionNote} · ${enabledSkills.length} skills`;
+  const companionRow = toolsets.find((row) => row?.name === 'companion') || enabledToolsets.find((row) => row?.companion);
+  const companionList = Array.isArray(companionRow?.tools) ? companionRow.tools : [];
+  const companionTools = companionList.length || Number(summary.companionTools) || 0;
+  $('runtimeSummary').textContent = `${enabledToolsets.length} sets · ${toolCount} tools · ${companionTools} companion · ${enabledSkills.length} skills`;
   $('runtimeSkillCount').textContent = enabledSkills.length ? `${enabledSkills.length} enabled` : 'none';
+  if ($('companionCount')) $('companionCount').textContent = companionTools ? `${companionTools} mirrored` : 'none';
 
   const toolsetRoot = $('runtimeToolsets');
   toolsetRoot.textContent = '';
@@ -377,11 +379,25 @@ function renderRuntime(runtime) {
     toolsetRoot.appendChild(runtimeChip('No enabled toolsets', '', 'warn'));
   } else {
     for (const row of enabledToolsets.sort((a, b) => String(a.label || a.name).localeCompare(String(b.label || b.name)))) {
+      if (row.name === 'companion') continue;
       const tools = Array.isArray(row.tools) ? row.tools : [];
       const label = row.label || row.name || 'toolset';
       const configured = row.configured === false ? ' · needs configuration' : '';
       const title = `${row.description || row.name || label}\n${tools.length} tools${configured}${tools.length ? `\n\n${tools.join('\n')}` : ''}`;
       toolsetRoot.appendChild(runtimeChip(`${label} · ${tools.length}`, title, row.configured === false ? 'warn' : 'ok'));
+    }
+  }
+
+  const companionRoot = $('runtimeCompanion');
+  if (companionRoot) {
+    companionRoot.textContent = '';
+    if (!companionList.length) {
+      companionRoot.appendChild(runtimeChip('Companion catalog unavailable', '', 'warn'));
+    } else {
+      for (const name of companionList.slice(0, 80)) {
+        companionRoot.appendChild(runtimeChip(String(name).replace(/^browser_/, ''), String(name), 'ok'));
+      }
+      if (companionList.length > 80) companionRoot.appendChild(runtimeChip(`+${companionList.length - 80} more`, 'Additional companion actions are hidden from this compact view.'));
     }
   }
 
@@ -757,7 +773,7 @@ $('refreshModels').addEventListener('click', () => loadModels(selectedModelId ||
     if (globalThis.HermesTheme) HermesTheme.apply(config);
     await Promise.all([
       loadModels(selectedModelId, selectedProvider),
-      loadRuntime(false)
+      loadRuntime(true)
     ]);
   }
 })();

@@ -545,6 +545,22 @@ async function handleDialog(params, tabId) {
   return runInMainWorld(tabId, readPageHooks, [{}]);
 }
 
+async function handleViewport(params, tabId) {
+  const action = verb(params, params.width != null || params.height != null ? 'set' : 'get');
+  const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  if (!tab?.windowId) return null;
+  if (action === 'set') {
+    const patch = {};
+    if (params.width != null) patch.width = Number(params.width);
+    if (params.height != null) patch.height = Number(params.height);
+    if (!Object.keys(patch).length) return { ok: false, error: 'viewport set requires width or height' };
+    const win = await chrome.windows.update(tab.windowId, patch);
+    return { ok: true, value: { width: win.width, height: win.height, state: win.state } };
+  }
+  const win = await chrome.windows.get(tab.windowId);
+  return { ok: true, value: { width: win.width, height: win.height, state: win.state } };
+}
+
 async function handleZoom(params, tabId) {
   const action = verb(params, params.factor != null || params.zoom != null ? 'set' : 'get');
   const id = targetTabId(params, tabId);
@@ -593,6 +609,8 @@ export async function runChromeTool(name, params = {}, tabId = null) {
         return await handleDialog(params, tabId);
       case 'zoom':
         return await handleZoom(params, tabId);
+      case 'viewport':
+        return await handleViewport(params, tabId);
       default:
         return null;
     }

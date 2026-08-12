@@ -557,6 +557,88 @@ function actionDiff(p = {}) {
   return { ok: true, value: { changed, url: location.href, title: document.title, key }, isChanged: changed };
 }
 
+async function actionHoldClick(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  const ms = Math.min(Math.max(Number(p.ms ?? p.duration ?? 800), 50), 8000);
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  await sleep(40);
+  fireMouse(target, 'pointerdown', { button: 0 });
+  fireMouse(target, 'mousedown', { button: 0 });
+  await sleep(ms);
+  fireMouse(target, 'mouseup', { button: 0 });
+  fireMouse(target, 'click', { button: 0 });
+  return { ok: true, value: `hold-clicked ${selector} (${ms}ms)` };
+}
+
+function actionNetwork(p = {}) {
+  const limit = Math.min(Math.max(Number(p.limit) || 50, 1), 200);
+  const needle = String(p.query || p.filter || '').toLowerCase();
+  const entries = (typeof performance !== 'undefined' && performance.getEntriesByType
+    ? performance.getEntriesByType('resource')
+    : []).filter((entry) => !needle || String(entry.name || '').toLowerCase().includes(needle));
+  return {
+    ok: true,
+    count: entries.length,
+    value: entries.slice(-limit).map((entry) => ({
+      url: entry.name || '',
+      type: entry.initiatorType || '',
+      duration: Math.round(Number(entry.duration) || 0),
+      size: Number(entry.transferSize) || 0
+    }))
+  };
+}
+
+function actionFind(p = {}) {
+  const text = String(p.text || p.query || p.pattern || '').trim();
+  if (!text) return { ok: false, error: 'find requires text' };
+  return actionGrep({ pattern: text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), limit: p.limit });
+}
+
+async function actionClipboard(p = {}) {
+  const action = String(p.action || (p.text != null || p.value != null ? 'write' : 'read')).toLowerCase();
+  if (action === 'write' || action === 'set' || action === 'copy') {
+    const text = String(p.text ?? p.value ?? '');
+    if (!navigator.clipboard?.writeText) return { ok: false, error: 'clipboard write is unavailable' };
+    await navigator.clipboard.writeText(text);
+    return { ok: true, value: `copied ${text.length} chars` };
+  }
+  if (!navigator.clipboard?.readText) return { ok: false, error: 'clipboard read is unavailable' };
+  try {
+    const text = await navigator.clipboard.readText();
+    return { ok: true, value: String(text || '').slice(0, OUTPUT_LIMIT) };
+  } catch (error) {
+    return { ok: false, error: `clipboard read failed: ${error.message}` };
+  }
+}
+
+function actionViewport() {
+  const view = typeof window !== 'undefined' ? window : globalThis;
+  return {
+    ok: true,
+    value: {
+      innerWidth: Number(view.innerWidth) || 0,
+      innerHeight: Number(view.innerHeight) || 0,
+      devicePixelRatio: Number(view.devicePixelRatio) || 1
+    }
+  };
+}
+
+function actionCdpInfo() {
+  return {
+    ok: true,
+    value: {
+      url: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      frames: window.frames ? window.frames.length : 0,
+      viewport: actionViewport().value,
+      note: 'Companion CDP-lite page info. Full Chrome DevTools Protocol stays Hermes-native.'
+    }
+  };
+}
+
 /** BrowserOS evaluate: run a small read-only JS expression and return its JSON-safe result. */
 function isMutatingEvaluate(expr) {
   if (/\b(eval|Function|import|require)\b/.test(expr)) return true;
@@ -607,6 +689,12 @@ async function runAction(action) {
       case 'drag': case 'drag_at': return await actionDrag(p);
       case 'diff': case 'changed': return actionDiff(p);
       case 'evaluate': case 'eval': case 'js': return actionEvaluate(p);
+      case 'hold_click': case 'holdclick': case 'long_click': return await actionHoldClick(p);
+      case 'network': return actionNetwork(p);
+      case 'find': return actionFind(p);
+      case 'clipboard': return await actionClipboard(p);
+      case 'viewport': return actionViewport(p);
+      case 'cdp_info': case 'cdp': return actionCdpInfo();
       case 'get_images': case 'images': return actionGetImages(p);
       case 'page_content': case 'pagecontent': case 'markdown': case 'get_page_content': return actionPageContent(p);
       case 'page_links': case 'links': case 'get_page_links': return actionPageLinks(p);

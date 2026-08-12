@@ -208,10 +208,12 @@ async function main() {
     runtime = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/runtime`, { headers: authHeaders })).json();
   } catch {}
   ok(runtime.object === 'hermes.runtime', 'runtime endpoint identifies Hermes runtime payload');
-  ok(runtime.summary?.enabledToolsets === 2, 'runtime keeps Hermes enabled toolset count');
+  ok(runtime.summary?.enabledToolsets >= 3, 'runtime includes Hermes toolsets plus the companion catalog');
   ok(runtime.summary?.tools > 20 && runtime.summary?.companionTools > 20, 'runtime tool count includes the companion catalog');
   const browserSet = runtime.toolsets?.find((row) => row.name === 'browser');
+  const companionSet = runtime.toolsets?.find((row) => row.name === 'companion');
   ok(browserSet?.tools?.includes('browser_bookmarks') && browserSet?.tools?.includes('browser_tabs') && browserSet?.tools?.includes('browser_page_content'), 'browser toolset is expanded with companion actions');
+  ok(companionSet?.tools?.includes('browser_network') && companionSet?.tools?.includes('browser_exec') && companionSet?.tools?.includes('browser_cdp'), 'companion catalog includes Hermes-aligned actions from GitHub');
   ok(runtime.summary?.enabledSkills === 1 && runtime.skills?.[0]?.name === 'browser-research', 'runtime exposes Hermes skills and enabled count');
 
   // AG-UI stream.

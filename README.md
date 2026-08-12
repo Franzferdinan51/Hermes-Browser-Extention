@@ -2,7 +2,7 @@
 
 A Chrome/Chromium side-panel companion for **Nous Research Hermes Agent**. It sends current-page context to Hermes over a local AG-UI bridge, streams the answer back into the browser, exposes Hermes tool activity, and can mirror a safe subset of Hermes browser actions into the active tab.
 
-**Current release: 0.3.3**
+**Current release: 0.3.4**
 
 Sources and design references:
 
@@ -10,6 +10,12 @@ Sources and design references:
 - **AG-UI** — MIT — agent ↔ UI event protocol
 - **Hermes Browser Extension** (`abundantbeing/hermes-browser-extension`) — MIT — useful runtime-event, recovery, capability, and companion-plugin patterns
 - **BrowserOS** (`browseros-ai/BrowserOS`) — AGPL-3.0 — architectural ideas only; **no BrowserOS source code is copied into this MIT project**
+
+## What 0.3.4 adds
+
+- Runtime inspector always shows a **Companion actions** list, not just Hermes’s native 8-tool browser set.
+- Catalog aligned to current Nous Hermes `toolsets.py`: `browser_console`, `browser_dialog`, `browser_cdp`, `browser_exec`.
+- New companion actions from that Hermes list plus public automation catalogs: hold-click, network timing, clipboard, viewport, find-in-page.
 
 ## What 0.3.3 adds
 
@@ -222,7 +228,7 @@ Bridge test:
 cd bridge
 npm ci
 npm test
-# expected contract: 35 passed, 0 failed
+# expected contract: 36 passed, 0 failed
 ```
 
 The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.
@@ -233,7 +239,7 @@ Page reader/actor test:
 cd test
 npm ci
 npm test
-# expected contract: 38 passed, 0 failed
+# expected contract: 42 passed, 0 failed
 ```
 
 GitHub Actions runs both suites plus `node --check` over the extension modules. The workflow also supports a manual run from the Actions tab.

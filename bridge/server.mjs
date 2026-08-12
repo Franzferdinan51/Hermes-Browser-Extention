@@ -209,7 +209,7 @@ function actionReadyToMirror(action) {
   const params = action.params || {};
   const needsTarget = new Set([
     'click', 'set_value', 'type_into', 'check', 'uncheck', 'clear', 'hover',
-    'focus', 'select_option', 'read', 'fill_many', 'drag'
+    'focus', 'select_option', 'read', 'fill_many', 'drag', 'hold_click'
   ]);
   if (action.name === 'navigate') return isSafeNavUrl(params.url);
   if (action.name === 'tabs') {
@@ -221,7 +221,7 @@ function actionReadyToMirror(action) {
     if (/^(create|new)$/.test(verb) && params.url) return isSafeNavUrl(params.url);
   }
   if (action.name === 'key') return Boolean(params.keys);
-  if (action.name === 'grep') return Boolean(params.pattern);
+  if (action.name === 'grep' || action.name === 'find') return Boolean(params.pattern);
   if (action.name === 'evaluate') return Boolean(params.expression);
   if (action.name === 'fill_many') return Array.isArray(params.fields) && params.fields.length > 0;
   if (action.name === 'drag') return Boolean(params.ref && params.targetRef);
@@ -323,7 +323,14 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_close_page',
   'browser_switch_tab',
   'browser_active_tab',
-  'browser_move_page'
+  'browser_move_page',
+  'browser_exec',
+  'browser_cdp',
+  'browser_hold_click',
+  'browser_network',
+  'browser_clipboard',
+  'browser_viewport',
+  'browser_find'
 ]);
 
 // Public BrowserOS MCP catalog names → companion actions. Ideas only, no source.
@@ -367,7 +374,13 @@ const TOOL_ALIASES = {
   get_recent_history: 'browser_history',
   delete_history_url: 'browser_history',
   delete_history_range: 'browser_history',
-  act: 'browser_act'
+  act: 'browser_act',
+  browser_exec: 'browser_exec',
+  hold_click: 'browser_hold_click',
+  long_click: 'browser_hold_click',
+  list_network_requests: 'browser_network',
+  get_network_request: 'browser_network',
+  resize_page: 'browser_viewport'
 };
 
 function canonicalToolName(name = '') {
@@ -384,21 +397,29 @@ function companionToolNames() {
   return [...MIRRORABLE_BROWSER_TOOLS].sort();
 }
 
+function normalizeToolName(entry) {
+  if (typeof entry === 'string') return entry;
+  return String(entry?.name || entry?.id || entry?.tool || '').trim();
+}
+
 /** Merge the active-tab companion catalog into Hermes runtime metadata. */
 function withCompanionCatalog(runtime = {}) {
   const companion = companionToolNames();
   const toolsets = Array.isArray(runtime.toolsets)
-    ? runtime.toolsets.map((row) => ({ ...row, tools: Array.isArray(row.tools) ? [...row.tools] : [] }))
+    ? runtime.toolsets.map((row) => ({
+      ...row,
+      tools: Array.isArray(row.tools) ? row.tools.map(normalizeToolName).filter(Boolean) : []
+    }))
     : [];
-  const browserIdx = toolsets.findIndex((row) => /browser/i.test(String(row.name || row.label || '')));
+  const browserIdx = toolsets.findIndex((row) => /browser/i.test(String(row.name || row.label || '')) && row.name !== 'companion');
   if (browserIdx >= 0) {
     const have = new Set(toolsets[browserIdx].tools.map((name) => String(name).toLowerCase()));
     for (const name of companion) {
       if (!have.has(name)) toolsets[browserIdx].tools.push(name);
     }
     toolsets[browserIdx].tools.sort((a, b) => String(a).localeCompare(String(b)));
-    toolsets[browserIdx].companion = true;
-  } else {
+  }
+  if (!toolsets.some((row) => row.name === 'companion')) {
     toolsets.push({
       name: 'companion',
       label: 'Browser companion',
@@ -535,7 +556,20 @@ function normalizeBrowserTool(name, args = {}) {
     case 'browser_upload':
       return { name: 'upload', params: args };
     case 'browser_run':
+    case 'browser_exec':
       return { name: 'run', params: args };
+    case 'browser_cdp':
+      return { name: 'cdp_info', params: args };
+    case 'browser_hold_click':
+      return { name: 'hold_click', params: { selector, ms: args.ms ?? args.duration ?? args.timeout } };
+    case 'browser_network':
+      return { name: 'network', params: args };
+    case 'browser_clipboard':
+      return { name: 'clipboard', params: args };
+    case 'browser_viewport':
+      return { name: 'viewport', params: args };
+    case 'browser_find':
+      return { name: 'find', params: { pattern: args.pattern || args.query || args.text, limit: args.limit } };
     case 'browser_act': {
       const actName = args.name || args.action || args.tool;
       if (!actName || !isBrowserCompanionTool(actName) || canonicalToolName(actName) === 'browser_act') return null;
@@ -756,6 +790,14 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_get_images(limit?)',
     'browser_evaluate(expression)',
     'browser_console(level?, limit?)',
+    'browser_dialog(action=accept|dismiss|observe, text?)',
+    'browser_cdp()',
+    'browser_exec(actions[])',
+    'browser_hold_click(@eN, ms?)',
+    'browser_network(limit?)',
+    'browser_clipboard(action=read|write, text?)',
+    'browser_viewport(action=get|set, width?, height?)',
+    'browser_find(text)',
     'browser_vision()',
     'browser_tabs(action=list|create|close|switch|duplicate|pin|mute|move, tabId?, url?)',
     'browser_windows(action=list|create|close|focus|update, windowId?, url?)',
@@ -768,7 +810,6 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_links(limit?)',
     'browser_dom()',
     'browser_search_dom(selector?, text?)',
-    'browser_dialog(action=accept|dismiss|observe, text?)',
     'browser_zoom(action=get|set|reset, factor?)',
     'browser_screenshot(format?)',
     'browser_pdf()',

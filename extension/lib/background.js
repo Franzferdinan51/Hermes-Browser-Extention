@@ -359,6 +359,7 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
     case 'dialog':
     case 'handle_dialog':
     case 'zoom':
+    case 'viewport':
       return runChromeTool(name, params, tabId);
     case 'screenshot': case 'capture': {
       try {
@@ -540,7 +541,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     case 'get-runtime': {
-      if (lastRuntime && !msg.refresh) {
+      if (lastRuntime && !msg.refresh && lastRuntime.summary?.companionTools) {
         sendResponse({ ok: true, ...lastRuntime });
         return true;
       }
