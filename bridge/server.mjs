@@ -136,6 +136,7 @@ const wsClients = new Set();
 const pendingToolResults = new Map();
 const mirrorStreams = new Map();
 const threadMirrorResults = new Map();
+const threadAttachPins = new Map();
 
 function wsSend(obj) {
   let sent = 0;
@@ -233,15 +234,34 @@ function actionReadyToMirror(action) {
   return true;
 }
 
-function attachPin(input = {}) {
+function attachPin(input = {}, threadId = input.threadId) {
   const pageContext = (input.context || []).find((ctx) => ctx.type === 'page_context' || ctx.document);
-  const tabId = pageContext?.tabId ?? input.attachedTab?.id ?? null;
-  return {
-    attached: Boolean(input.attachPage || pageContext || input.attachedTab),
-    tabId,
-    url: pageContext?.url || input.attachedTab?.url || '',
-    title: pageContext?.title || input.attachedTab?.title || ''
+  const remembered = threadId ? threadAttachPins.get(threadId) : null;
+  const fromInput = Boolean(input.attachPage || pageContext || input.attachedTab);
+  const pin = {
+    attached: fromInput || Boolean(remembered),
+    tabId: pageContext?.tabId ?? input.attachedTab?.id ?? remembered?.tabId ?? null,
+    url: pageContext?.url || input.attachedTab?.url || remembered?.url || '',
+    title: pageContext?.title || input.attachedTab?.title || remembered?.title || ''
   };
+  if (pin.attached && threadId) rememberThread(threadAttachPins, threadId, { tabId: pin.tabId, url: pin.url, title: pin.title });
+  return pin;
+}
+
+function workingBrowserBlock(pin) {
+  const where = [
+    pin.tabId != null ? `tab #${pin.tabId}` : 'the attached tab',
+    pin.url || '',
+    pin.title || ''
+  ].filter(Boolean).join(' · ');
+  return (
+    `[WORKING BROWSER]\n` +
+    `You are already inside the user's real Chrome (${where || 'attached tab'}).\n` +
+    `This attached tab is your only browser. Do all reading and clicking here.\n` +
+    `Do not open Hermes' internal browser, a headless browser, Browserbase, or another window.\n` +
+    `Do not call web_search, web_extract, browser_navigate, or browser_new_page unless the user explicitly asks to leave this tab.\n` +
+    `If you need more of THIS page, use browser_snapshot, browser_page_content, browser_read, browser_scroll, browser_grep, browser_click, or browser_type. The companion runs those in the attached tab.`
+  );
 }
 
 function lastUserText(input = {}) {
@@ -345,7 +365,7 @@ function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools, inp
   let args;
   try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
   catch { return; } // streamed JSON is not complete yet
-  const pin = attachPin(input);
+  const pin = attachPin(input, threadId);
   const rewritten = rewriteOffTabTool(tool.name, args, pin, input);
   let action = rewritten;
   if (!action) {
@@ -908,7 +928,8 @@ async function runAgent(threadId, runId, input, res) {
 function buildHermesPrompt(input, threadId = input.threadId) {
   const parts = [];
   const pageContext = (input.context || []).find((ctx) => ctx.type === 'page_context' || ctx.document);
-  const attached = Boolean(input.attachPage || pageContext || input.attachedTab);
+  const pin = attachPin(input, threadId);
+  const attached = pin.attached;
 
   for (const ctx of input.context || []) {
     if (ctx.type === 'page_context' || ctx.document) {
@@ -928,8 +949,8 @@ function buildHermesPrompt(input, threadId = input.threadId) {
   }
 
   if (attached) {
-    const url = pageContext?.url || input.attachedTab?.url || '';
-    const tabId = pageContext?.tabId || input.attachedTab?.id;
+    const url = pin.url || pageContext?.url || input.attachedTab?.url || '';
+    const tabId = pin.tabId ?? pageContext?.tabId ?? input.attachedTab?.id;
     parts.push(
       `[ATTACHED LIVE TAB]\n` +
       `The user attached their real Chrome tab${tabId != null ? ` #${tabId}` : ''}${url ? ` (${url})` : ''}. This is not a Hermes-internal, headless, or secondary browser.\n` +
@@ -1032,11 +1053,12 @@ function buildHermesPrompt(input, threadId = input.threadId) {
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
     (attached
-      ? 'The live Chrome tab is already attached. Use @e1 refs from the page snapshot and companion-mirrored browser tools on that tab. Do not open another browser. Search/navigate-away calls are rewritten onto this tab. '
+      ? 'You are already in the attached Chrome tab. Use @e1 refs and companion-mirrored browser tools on THAT tab only. Do not open another browser. Search/navigate-away calls are rewritten onto this tab. '
       : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
     'Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );
 
+  if (attached) parts.unshift(workingBrowserBlock(pin));
   return parts.join('\n\n').trim();
 }
 

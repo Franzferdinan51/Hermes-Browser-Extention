@@ -288,8 +288,10 @@ async function main() {
   ok(firstChatPrompt.includes('[USER REQUEST]\nsummarize this page'), 'Hermes prompt includes current user message');
   ok(firstChatPrompt.includes('[PAGE CONTEXT]') && firstChatPrompt.includes('https://example.com'), 'Hermes prompt includes page context');
   ok(firstChatPrompt.includes('[ATTACHED LIVE TAB]') && firstChatPrompt.includes('Do not call web_search'), 'attached page is bound to the live Chrome tab');
+  ok(firstChatPrompt.includes('[WORKING BROWSER]') && firstChatPrompt.includes('already inside the user\'s real Chrome'), 'attached turn tells Hermes to work in this Chrome tab');
   ok(!/prefer web_search\/web_extract for simple information retrieval/i.test(firstChatPrompt), 'attached page does not tell Hermes to search another browser');
   ok(sentMessage.includes('[VERIFIED ACTIVE TAB RESULTS]') && sentMessage.includes('Fake active tab'), 'next turn receives verified active-tab result');
+  ok(sentMessage.includes('[WORKING BROWSER]') && sentMessage.includes('https://example.com'), 'follow-up stays bound to the attached Chrome tab');
 
   const isolated = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',
@@ -302,6 +304,7 @@ async function main() {
   await isolated.text();
   const isolatedPrompt = String(lastChatStartPayload?.message || '');
   ok(!isolatedPrompt.includes('[VERIFIED ACTIVE TAB RESULTS]'), 'a new thread does not inherit another conversation\'s tab results');
+  ok(!isolatedPrompt.includes('[WORKING BROWSER]') && !isolatedPrompt.includes('[ATTACHED LIVE TAB]'), 'a new thread does not inherit the working-browser pin');
   ok(/When no page is attached, prefer web_search/i.test(isolatedPrompt), 'unattached turns may still use web search');
 
   ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console(') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
