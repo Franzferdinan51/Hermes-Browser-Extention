@@ -404,9 +404,9 @@ async function main() {
   ok(!isolatedPrompt.includes('[WORKING BROWSER]') && !isolatedPrompt.includes('[ATTACHED LIVE TAB]'), 'a new thread does not inherit the working-browser pin');
   ok(/When no page is attached, prefer web_search/i.test(isolatedPrompt), 'unattached turns may still use web search');
 
-  ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_console(') && firstChatPrompt.includes('browser_vision()'), 'prompt advertises the Hermes core browser toolset');
-  ok(firstChatPrompt.includes('browser_check(@eN)') && firstChatPrompt.includes('browser_evaluate(expression)') && firstChatPrompt.includes('browser_tabs(action='), 'prompt advertises expanded BrowserOS-parity tools');
-  ok(firstChatPrompt.includes('browser_bookmarks(') && firstChatPrompt.includes('browser_page_content(') && firstChatPrompt.includes('browser_cookies('), 'prompt advertises catalog-inspired chrome tools');
+  ok(firstChatPrompt.includes('browser_click(@eN)') && firstChatPrompt.includes('browser_snapshot()') && firstChatPrompt.includes('browser_run(actions[])'), 'prompt advertises the compact Hermes browser toolset');
+  ok(firstChatPrompt.includes('browser_tabs(action=list|create|switch)') && firstChatPrompt.includes('browser_screenshot()'), 'prompt advertises compact BrowserOS-parity tools');
+  ok(firstChatPrompt.length < 5000, 'compact tool contract keeps prompt overhead bounded');
 
   const beforeSafety = companionActions.length;
   await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {

@@ -17,7 +17,7 @@ const DEFAULTS = {
   workspace: '',
   autoSnapshot: false,
   attachPageContext: true,
-  maxDomChars: 30000,
+  maxDomChars: 12000,
   enablePageActing: true,
   theme: 'midnight',
   density: 'comfortable',
@@ -695,8 +695,8 @@ async function chat(userText, opts = {}) {
     }
     if (snapshot?.snapshot) {
       const doc = pageDocument(snapshot.snapshot);
-      const interactive = (snapshot.snapshot.interactive || []).slice(0, 200);
-      const maxDomChars = Math.max(5000, Math.min(100000, Number(cfg.maxDomChars) || 30000));
+      const interactive = (snapshot.snapshot.interactive || []).slice(0, 80);
+      const maxDomChars = Math.max(4000, Math.min(50000, Number(cfg.maxDomChars) || 12000));
       extra.attachPage = true;
       extra.attachedTab = { id: snapshot.tabId, url: snapshot.url, title: snapshot.title };
       extra.context = [{
@@ -706,7 +706,7 @@ async function chat(userText, opts = {}) {
         tabId: snapshot.tabId,
         document: doc.slice(0, maxDomChars),
         accessibility: snapshot.snapshot.accessibility || '',
-        signals: snapshot.snapshot.signals || [],
+        signals: (snapshot.snapshot.signals || []).slice(0, 30),
         feed: snapshot.snapshot.feed || [],
         interactive,
         time: Date.now()
