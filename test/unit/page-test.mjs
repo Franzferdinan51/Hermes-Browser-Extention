@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript } from '../../extension/lib/thread.js';
+import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../../extension/lib/thread.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.join(__dirname, '..', '..', 'extension');
@@ -262,6 +262,20 @@ async function drive() {
   ok(threadForTab(bindTabThread(bound, 42, ''), 42) === '', 'clearing a tab conversation does not leak the previous thread');
   const notes = appendTranscript(appendTranscript([], 'user', 'hi'), 'assistant', 'hello');
   ok(notes.length === 2 && notes[1].text === 'hello', 'tab transcripts keep user and assistant turns');
+
+  let tabMap = bindTabThread(bindTabThread({}, 10, 'thread_a'), 20, 'thread_b');
+  let book = { thread_a: appendTranscript(appendTranscript([], 'user', 'on A'), 'assistant', 'reply A'), thread_b: appendTranscript([], 'user', 'on B') };
+  const isolated = isolateTabConversation(tabMap, book, 10);
+  ok(threadForTab(isolated.tabThreads, 10) === '' && isolated.clearedThreadId === 'thread_a', 'New isolates only the current tab thread');
+  ok(!isolated.transcripts.thread_a && isolated.transcripts.thread_b?.[0]?.text === 'on B', 'New on tab A leaves tab B transcript intact');
+  ok(pageIdentity({ snapshot: { title: 'News', url: 'https://news.example' } }).label === 'News', 'page identity prefers snapshot title over empty');
+  ok(pageIdentity({ page: { title: '', url: 'https://example.com/x' } }).label === 'https://example.com/x', 'page identity uses URL when title is missing');
+  const followed = pageIdentity({ title: 'Google News', url: 'https://news.google.com' });
+  ok(followed.label === 'Google News' && !followed.empty, 'page identity from a thread-change event is not a stale dash');
+  ok(pageIdentity({}).empty && pageIdentityFallback().includes('snapshot'), 'empty page identity tells the user to open a page or snapshot');
+  ok(pageIdentity({ ok: false, error: 'Restricted browser page', title: 'chrome://extensions' }).label.includes('cannot attach'), 'restricted pages explain that they cannot be attached');
+  ok(visibleError('') !== 'unknown' && visibleError('unknown').includes('bridge'), 'chat errors stay actionable instead of unknown');
+  ok(connectionState({ clientBusy: true }).kind === 'busy' && connectionState({ bridgeConnected: true }).kind === 'ok' && connectionState({}).kind === 'err', 'connection state covers busy, connected, and unavailable');
 }
 await drive().catch((e) => { console.error('drive error', e.message); failed++; });
 

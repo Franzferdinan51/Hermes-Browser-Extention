@@ -1,16 +1,34 @@
 // popup.js — compact chat popup. Streams AG-UI events via the runtime port and
 // renders simple assistant/user/tool bubbles. Keeps the SW alive while open.
 import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
+import { pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../lib/thread.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 
+function hideEmptyHint() {
+  const hint = $('emptyHint');
+  if (hint) hint.remove();
+}
+
 function appendMsg(cls, text) {
+  hideEmptyHint();
   const d = document.createElement('div');
   d.className = 'msg ' + cls;
   d.textContent = text;
   logEl.appendChild(d);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function showPage(source) {
+  const id = pageIdentity(source || {});
+  $('pageLabel').textContent = id.empty ? pageIdentityFallback() : id.label;
+  $('pageLabel').title = id.url || id.label;
+}
+
+function applyConnection(source) {
+  const conn = connectionState(source);
+  setStatus(conn.kind, conn.label);
 }
 
 let port = null;
@@ -30,23 +48,39 @@ function connect() {
       const e = m.event;
       if (e.type === 'TEXT_MESSAGE_CONTENT') $('statusText').textContent = 'streaming…';
       if (e.type === 'TOOL_CALL_START') appendMsg('tool', `🔧 ${e.name || e.toolName || 'tool'}`);
+      if (e.type === 'RUN_ERROR') appendMsg('err', 'Error: ' + visibleError(e.error || e.message));
     } else if (m.kind === 'state') {
-      setStatus(m.clientBusy ? 'busy' : 'ok', m.clientBusy ? 'running' : 'connected');
+      applyConnection({ bridgeConnected: m.bridgeConnected !== false, clientBusy: m.clientBusy });
+      if (m.page || m.snapshot) showPage(m);
+    } else if (m.kind === 'run-start') {
+      setPopupBusy(true, 'working');
+    } else if (m.kind === 'run-end') {
+      if (shouldIdleComposer(m.sendToken, liveSend)) {
+        setPopupBusy(false, m.aborted ? 'stopped' : (m.ok === false ? 'error' : 'connected'));
+      }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
-      $('pageLabel').textContent = m.snapshot.title || m.snapshot.url || '—';
-    } else if (m.kind === 'page-context-status' && (m.title || m.url)) {
-      $('pageLabel').textContent = m.title || m.url;
+      showPage(m.snapshot);
+    } else if (m.kind === 'thread-changed') {
+      showPage(m);
+    } else if (m.kind === 'page-context-status') {
+      showPage(m);
+    } else if (m.kind === 'bridge-status') {
+      applyConnection({ bridgeConnected: m.connected, clientBusy: busy });
     }
   });
   port.postMessage({ kind: 'hello' });
-  port.onDisconnect.addListener(() => { port = null; });
+  port.onDisconnect.addListener(() => { port = null; applyConnection({ bridgeConnected: false, clientBusy: busy }); });
 }
 
 async function refresh() {
   const st = await chrome.runtime.sendMessage({ kind: 'get-state' }).catch(() => null);
-  if (st && st.snapshot) {
-    $('pageLabel').textContent = st.snapshot.title || st.snapshot.url || '—';
+  if (!st) {
+    showPage({});
+    applyConnection({ bridgeConnected: false });
+    return;
   }
+  applyConnection({ bridgeConnected: st.bridgeConnected, clientBusy: st.clientBusy });
+  showPage(st);
 }
 
 function setPopupBusy(on, label) {
@@ -62,7 +96,7 @@ async function send() {
   const sendToken = ++liveSend;
   $('prompt').value = '';
   appendMsg('user', text);
-  setPopupBusy(true, 'running…');
+  setPopupBusy(true, 'working');
   const r = await chrome.runtime.sendMessage({ kind: 'chat', text, sendToken }).catch((e) => ({ ok: false, error: String(e) }));
   if (!shouldIdleComposer(sendToken, liveSend)) return;
   if (r?.aborted) {
@@ -70,13 +104,12 @@ async function send() {
     return;
   }
   if (r && r.ok) {
-    // Reconstruct assistant reply from result.messages
     const msgs = (r.r && r.r.messages) || [];
     const asst = msgs.filter((m) => m.role !== 'user').map((m) => m.text || '').filter(Boolean).join('');
     if (asst) appendMsg('assistant', asst);
-    setPopupBusy(false, 'done');
+    setPopupBusy(false, 'connected');
   } else {
-    appendMsg('err', 'Error: ' + (r && r.error ? r.error : 'unknown'));
+    appendMsg('err', 'Error: ' + visibleError(r && r.error));
     setPopupBusy(false, 'error');
   }
 }
@@ -89,7 +122,14 @@ $('btnStop').addEventListener('click', async () => {
 });
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-$('clear').addEventListener('click', async () => { logEl.innerHTML = ''; await chrome.runtime.sendMessage({ kind: 'clear-thread' }); });
+$('clear').addEventListener('click', async () => {
+  logEl.innerHTML = '';
+  const hint = document.createElement('div');
+  hint.id = 'emptyHint';
+  hint.textContent = 'New conversation on this tab. Other tabs keep their chats. Ask about this page.';
+  logEl.appendChild(hint);
+  await chrome.runtime.sendMessage({ kind: 'clear-thread' });
+});
 $('options').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('openPanel').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

@@ -7,7 +7,7 @@
 
 import { AGUIClient, abortActiveRun, leftoverAbortedResult } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
-import { readThreadId, threadForTab, bindTabThread, appendTranscript } from './thread.js';
+import { readThreadId, threadForTab, bindTabThread, appendTranscript, isolateTabConversation } from './thread.js';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8965',
@@ -90,6 +90,7 @@ let transcripts = {};
 let followTimer = null;
 let pendingFollowTabId = null;
 let lastFollowKey = '';
+let lastPage = null;
 
 const TAB_THREADS_KEY = 'hermesTabThreads';
 const TRANSCRIPTS_KEY = 'hermesTranscripts';
@@ -160,9 +161,9 @@ function transcriptFor(threadId) {
 }
 
 function clearThread(tabId = ownedTabId) {
-  const old = currentThreadId;
-  if (tabId != null) tabThreads = bindTabThread(tabThreads, tabId, '');
-  if (old) delete transcripts[old];
+  const isolated = isolateTabConversation(tabThreads, transcripts, tabId);
+  tabThreads = isolated.tabThreads;
+  transcripts = isolated.transcripts;
   currentThreadId = threadForTab(tabThreads, tabId) || null;
   try {
     chrome.storage?.session?.set({
@@ -776,14 +777,16 @@ async function activeHttpTab() {
 }
 
 function emitPageBar(tab, extra = {}) {
-  emit('page-context-status', {
-    ok: !isRestrictedUrl(tab?.url),
+  const page = {
+    ok: extra.ok !== undefined ? extra.ok : !isRestrictedUrl(tab?.url),
     url: tab?.url || '',
     title: tab?.title || tab?.url || '',
     tabId: tab?.id,
     following: true,
     ...extra
-  });
+  };
+  lastPage = { title: page.title, url: page.url, tabId: page.tabId, ok: page.ok, error: page.error || '' };
+  emit('page-context-status', page);
 }
 
 async function followActivePage(tabId, reason = 'switch') {
@@ -996,6 +999,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         threadId: currentThreadId,
         snapshot: lastSnapshot,
+        page: lastSnapshot
+          ? { title: lastSnapshot.title || '', url: lastSnapshot.url || '', tabId: lastSnapshot.tabId }
+          : lastPage,
         ownedTabId,
         runtime: lastRuntime,
         transcript: transcriptFor(currentThreadId),
@@ -1038,6 +1044,10 @@ chrome.runtime.onConnect.addListener((port) => {
         kind: 'state',
         threadId: currentThreadId,
         runtime: lastRuntime,
+        page: lastSnapshot
+          ? { title: lastSnapshot.title || '', url: lastSnapshot.url || '', tabId: lastSnapshot.tabId }
+          : lastPage,
+        snapshot: lastSnapshot,
         clientBusy: client ? client.busy : false,
         bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN
       });

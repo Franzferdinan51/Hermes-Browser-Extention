@@ -1,6 +1,6 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
-import { readThreadId, buildChatRequest } from '../lib/thread.js';
+import { readThreadId, buildChatRequest, pageIdentity, pageIdentityFallback, visibleError, connectionState } from '../lib/thread.js';
 import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
 
 const $ = (id) => document.getElementById(id);
@@ -66,10 +66,10 @@ function renderTranscript(entries) {
   }
 }
 
-function applyPageTitle(title, url) {
-  if (!title && !url) return;
-  $('pageTitle').textContent = title || url;
-  $('pageTitle').title = url || title || '';
+function showPage(source) {
+  const id = pageIdentity(source || {});
+  $('pageTitle').textContent = id.empty ? pageIdentityFallback() : id.label;
+  $('pageTitle').title = id.url || id.label;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ function showError(value) {
   const normalized = raw.replace(/^Error:\s*/i, '');
   if (normalized === lastRenderedError) return;
   lastRenderedError = normalized;
-  addEl('err', 'Error: ' + normalized);
+  addEl('err', 'Error: ' + visibleError(normalized));
   setTimeout(() => { if (lastRenderedError === normalized) lastRenderedError = ''; }, 1500);
 }
 
@@ -558,7 +558,7 @@ function handleEvent(e, sendToken) {
       finalizeStream();
       finalizeOpenTools(false, e.error || e.message);
       idleComposer(sendToken, 'error');
-      showError(e.error || e.message || 'unknown');
+      showError(e.error || e.message);
       break;
     default:
       break;
@@ -610,9 +610,10 @@ function connectPort() {
     if (m.kind === 'event' && m.event) handleEvent(m.event, m.sendToken);
     else if (m.kind === 'state') {
       bridgeConnected = Boolean(m.bridgeConnected);
-      setStatus(m.clientBusy ? 'busy' : bridgeConnected ? 'ok' : 'err');
+      setStatus(connectionState({ bridgeConnected, clientBusy: m.clientBusy }).kind);
       if (m.runtime) renderRuntime(m.runtime);
       if (m.threadId) threadId = m.threadId;
+      if (m.page || m.snapshot) showPage(m);
     } else if (m.kind === 'run-start') {
       setComposerBusy(true, 'Thinking…');
     } else if (m.kind === 'run-end') {
@@ -627,24 +628,24 @@ function connectPort() {
         }
       }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
-      applyPageTitle(m.snapshot.title || m.snapshot.snapshot?.title, m.snapshot.url);
+      showPage(m.snapshot);
     } else if (m.kind === 'thread-changed') {
-      applyPageTitle(m.title, m.url);
+      showPage(m);
       const next = String(m.threadId || '');
       if (next !== String(threadId || '')) {
         threadId = next;
         if (!busy) renderTranscript(m.transcript || []);
       }
     } else if (m.kind === 'page-context-status') {
-      applyPageTitle(m.title, m.url);
+      showPage(m);
       if (m.ok) {
         if (m.deferred) runLabel('Will attach this page after the current reply');
         else if (m.thin) runLabel(`This page · ${m.words || 0} words${m.posts ? ` · ${m.posts} posts` : ''}`);
         else runLabel(`This page · ${m.interactive || 0} controls${m.posts ? ` · ${m.posts} posts` : ''}`);
-      } else runLabel(m.error || 'Page context unavailable');
+      } else runLabel(pageIdentity(m).label || 'Restricted or unreadable page — open a normal http(s) tab.');
     } else if (m.kind === 'bridge-status') {
       bridgeConnected = Boolean(m.connected);
-      if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
+      if (!busy) setStatus(connectionState({ bridgeConnected, clientBusy: busy }).kind);
       if (bridgeConnected && !runtimeData) loadRuntime().catch(() => {});
     } else if (m.kind === 'agent-state' && m.phase && busy) {
       if (m.phase === 'running') runLabel('Thinking…');
@@ -665,15 +666,17 @@ async function updatePageBar() {
   const snap = r?.snapshot;
   if (r) {
     bridgeConnected = Boolean(r.bridgeConnected);
-    if (!busy) setStatus(bridgeConnected ? 'ok' : 'err');
+    if (!busy) setStatus(connectionState({ bridgeConnected, clientBusy: r.clientBusy }).kind);
     if (r.runtime) renderRuntime(r.runtime);
     const nextThread = String(r.threadId || '');
     if (nextThread !== String(threadId || '')) {
       threadId = nextThread;
       if (!busy) renderTranscript(r.transcript || []);
     }
+    showPage(r);
+  } else if (snap) {
+    showPage(snap);
   }
-  if (snap) applyPageTitle(snap.snapshot?.title || snap.title, snap.url);
 }
 
 async function snapshotNow() {
