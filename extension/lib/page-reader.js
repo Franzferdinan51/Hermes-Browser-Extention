@@ -176,6 +176,37 @@ function summary(root = document) {
   return { text, headings: h1, forms, links, buttons: root.querySelectorAll('button').length, inputs: root.querySelectorAll('input,textarea,select').length, images: root.querySelectorAll('img').length };
 }
 
+function isXHost(url = '') {
+  try { return /(^|\.)(x\.com|twitter\.com)$/i.test(new URL(url || location.href).hostname); }
+  catch { return /(^|\.)(x\.com|twitter\.com)$/i.test(String(url || '')); }
+}
+
+/** Visible posts on virtualized feeds (X/Twitter). Inner CSS trees hide tweet text. */
+function extractFeedPosts(root = document) {
+  const posts = [];
+  const seen = new Set();
+  const articles = Array.from(root.querySelectorAll('article[data-testid="tweet"], article[role="article"]'));
+  for (const article of articles.slice(0, 40)) {
+    if (!isVisible(article) && !article.querySelector('[data-testid="tweetText"]')) continue;
+    const textEl = article.querySelector('[data-testid="tweetText"]') || article.querySelector('[lang]');
+    const text = cleanText((textEl || article).innerText || textEl?.textContent || '').slice(0, 800);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    const user = cleanText(article.querySelector('[data-testid="User-Name"]')?.innerText || '').slice(0, 160);
+    const time = article.querySelector('time')?.getAttribute('datetime') || '';
+    posts.push({ user, time, text });
+  }
+  if (!posts.length) {
+    for (const node of Array.from(root.querySelectorAll('[data-testid="tweetText"]')).slice(0, 40)) {
+      const text = cleanText(node.innerText || node.textContent || '').slice(0, 800);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      posts.push({ user: '', time: '', text });
+    }
+  }
+  return posts;
+}
+
 function collectPageSignals(root = document) {
   const out = [];
   const seen = new Set();
@@ -200,7 +231,14 @@ function readPage() {
   const s = summary(root);
   const interactive = collectInteractive(root);
   const accessibility = buildAccessibilityTree(root);
-  const dom = buildDomText(root.body, 0, { used: 0 });
+  const feed = extractFeedPosts(root);
+  const readable = feed.length
+    ? feed.map((post) => `${post.user ? post.user + '\n' : ''}${post.text}`).join('\n\n')
+    : (s.text || '');
+  const domTree = buildDomText(root.body, 0, { used: 0 });
+  const treeWords = (String(domTree).match(/[A-Za-z]{3,}/g) || []).length;
+  const readWords = (readable.match(/[A-Za-z]{3,}/g) || []).length;
+  const dom = readWords >= 12 || treeWords < readWords + 8 ? readable : `${readable}\n\n${domTree}`.trim();
 
   const snapshot = {
     url: location.href,
@@ -211,6 +249,11 @@ function readPage() {
     interactive,
     accessibility,
     signals: collectPageSignals(root),
+    feed,
+    text: readable,
+    host: isXHost(location.href) ? 'x' : 'web',
+    thin: readWords < 12,
+    wordCount: readWords,
     dom,
     capturedAt: Date.now()
   };
@@ -225,5 +268,5 @@ function snapshotKey() {
 // Auto-register for content-script usage when loaded directly (not via ESM import).
 if (typeof globalThis !== 'undefined' && !globalThis.__AGUI_PAGE_READER_LOADED__) {
   globalThis.__AGUI_PAGE_READER_LOADED__ = true;
-  globalThis.HermesPageReader = { readPage, snapshotKey, collectInteractive, cssPath, isVisible };
+  globalThis.HermesPageReader = { readPage, snapshotKey, collectInteractive, cssPath, isVisible, extractFeedPosts, isXHost };
 }

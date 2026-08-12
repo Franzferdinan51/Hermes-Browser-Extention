@@ -40,7 +40,16 @@
     .switch-card .copy { flex: 1; }
     .switch-card .copy strong { display: block; font-size: 12px; margin-bottom: 2px; }
     .switch-card .copy span { color: var(--muted); font-size: 11px; line-height: 1.45; }
-    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .row2, .filter-grid { grid-template-columns: 1fr; } body { padding: 24px 14px 40px; } }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+    .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+    .stat b { display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .stat span { font-size: 12px; line-height: 1.4; word-break: break-word; }
+    .log-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .log-box { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.45; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; max-height: 280px; overflow: auto; white-space: pre-wrap; color: var(--muted); min-height: 120px; }
+    .log-box .err { color: var(--red); }
+    .log-box .warn { color: var(--amber); }
+    .log-box .info { color: var(--muted); }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .row2, .filter-grid, .stat-grid { grid-template-columns: 1fr; } body { padding: 24px 14px 40px; } }
   </style>
 </head>
 <body>
@@ -49,7 +58,7 @@
       <img src="../icons/icon-hero.png" alt="Hermes Browser" />
       <div>
         <h1>Hermes Browser Companion</h1>
-        <p class="sub">Local-first browser control over AG-UI, with a look you can actually live in.</p>
+        <p class="sub">Connection, page attach, and a live error log so silent X/tab misses are visible.</p>
       </div>
     </div>
 
@@ -158,6 +167,24 @@
             <div class="range-row"><input type="range" id="maxDomChars" min="5000" max="100000" step="5000" /><input type="number" id="maxDomCharsNumber" min="5000" max="100000" step="5000" /></div>
             <div class="hint">Larger snapshots provide more context but consume more tokens. Default: 30,000 characters.</div>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title">
+            <h2>Diagnostics</h2>
+            <span class="pill" id="diagCount">0 events</span>
+          </div>
+          <div class="stat-grid">
+            <div class="stat"><b>Last page</b><span id="diagPage">No snapshot yet</span></div>
+            <div class="stat"><b>Bridge</b><span id="diagBridge">unknown</span></div>
+          </div>
+          <div class="log-toolbar">
+            <button id="refreshDiag" type="button">Refresh log</button>
+            <button id="copyDiag" type="button">Copy</button>
+            <button id="clearDiag" type="button">Clear</button>
+          </div>
+          <div class="log-box" id="diagLog">No events yet. Send a message or attach a page to fill this log.</div>
+          <div class="hint" style="margin-top:10px">Warnings here usually mean Hermes did not get the live tab (common on X). Reload the tab, keep attach this tab on, then send again.</div>
         </div>
 
         <div class="card">

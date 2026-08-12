@@ -224,15 +224,19 @@ async function testConn() {
       setHealth(true, `bridge up · Hermes ${j.hermes || 'n/a'}`);
       $('testResult').textContent = JSON.stringify(j, null, 2);
       await chrome.runtime.sendMessage({ kind: 'set-config', patch: { bridgeUrl: url, authToken: token } });
+      loadDiag();
       await loadModels(selectedModelId, selectedProvider);
     } else {
       setHealth(false, `HTTP ${res.status}`);
       $('testResult').textContent = await res.text();
+      chrome.runtime.sendMessage({ kind: 'log-diag', level: 'error', source: 'settings', message: `Bridge health HTTP ${res.status}`, extra: { url } }).catch(() => null);
     }
   } catch (e) {
     setHealth(false, e.message);
     $('testResult').textContent = `Could not reach ${url}. Is the bridge running?\n\n${e.message}`;
+    chrome.runtime.sendMessage({ kind: 'log-diag', level: 'error', source: 'settings', message: String(e.message || e), extra: { url } }).catch(() => null);
   }
+  loadDiag();
 }
 
 $('save').addEventListener('click', async () => {
@@ -287,4 +291,63 @@ $('reset').addEventListener('click', async () => {
   $('saveState').textContent = 'Defaults restored.';
 });
 
+function formatDiagTime(ts) {
+  try { return new Date(ts).toLocaleTimeString(); }
+  catch { return String(ts || ''); }
+}
+
+function renderDiag(data) {
+  const log = Array.isArray(data?.log) ? data.log : [];
+  if ($('diagCount')) $('diagCount').textContent = `${log.length} event${log.length === 1 ? '' : 's'}`;
+  if ($('diagBridge')) $('diagBridge').textContent = data?.bridgeConnected ? 'companion connected' : 'companion offline';
+  if ($('diagPage')) {
+    if (data?.snapshot?.url) {
+      const bits = [data.snapshot.title || data.snapshot.url];
+      if (data.snapshot.posts) bits.push(`${data.snapshot.posts} posts`);
+      if (data.snapshot.words) bits.push(`${data.snapshot.words} words`);
+      if (data.snapshot.thin) bits.push('thin');
+      $('diagPage').textContent = bits.join(' · ');
+    } else {
+      $('diagPage').textContent = 'No snapshot yet';
+    }
+  }
+  const box = $('diagLog');
+  if (!box) return;
+  if (!log.length) {
+    box.textContent = 'No events yet. Send a message or attach a page to fill this log.';
+    return;
+  }
+  box.innerHTML = '';
+  for (const row of log.slice(0, 60)) {
+    const line = document.createElement('div');
+    line.className = row.level === 'error' ? 'err' : row.level === 'warn' ? 'warn' : 'info';
+    const extra = row.extra?.url ? ` · ${row.extra.url}` : '';
+    line.textContent = `${formatDiagTime(row.t)}  ${String(row.level || 'info').toUpperCase()}  [${row.source || 'app'}]  ${row.message || ''}${extra}`;
+    box.appendChild(line);
+  }
+}
+
+async function loadDiag() {
+  const r = await chrome.runtime.sendMessage({ kind: 'get-diag' }).catch(() => null);
+  if (r?.ok) renderDiag(r);
+  else if ($('diagLog')) $('diagLog').textContent = r?.error || 'Could not load the error log.';
+}
+
+if ($('refreshDiag')) $('refreshDiag').addEventListener('click', loadDiag);
+if ($('clearDiag')) $('clearDiag').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ kind: 'clear-diag' }).catch(() => null);
+  await loadDiag();
+});
+if ($('copyDiag')) $('copyDiag').addEventListener('click', async () => {
+  const text = $('diagLog')?.innerText || $('diagLog')?.textContent || '';
+  try {
+    await navigator.clipboard.writeText(text);
+    if ($('saveState')) $('saveState').textContent = 'Log copied.';
+  } catch {
+    if ($('saveState')) $('saveState').textContent = 'Could not copy the log.';
+  }
+});
+
 load();
+loadDiag();
+setInterval(loadDiag, 4000);

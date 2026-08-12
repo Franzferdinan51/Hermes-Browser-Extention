@@ -29,6 +29,54 @@ const store = {
   async set(patch) { await chrome.storage.local.set(patch); }
 };
 
+const DIAG_KEY = 'hermesDiagLog';
+const DIAG_MAX = 80;
+
+async function pushDiag(entry = {}) {
+  const row = {
+    t: Date.now(),
+    level: entry.level || 'info',
+    source: entry.source || 'app',
+    message: String(entry.message || ''),
+    extra: entry.extra && typeof entry.extra === 'object' ? entry.extra : null
+  };
+  try {
+    const data = await chrome.storage.local.get(DIAG_KEY);
+    const log = Array.isArray(data[DIAG_KEY]) ? data[DIAG_KEY] : [];
+    log.unshift(row);
+    await chrome.storage.local.set({ [DIAG_KEY]: log.slice(0, DIAG_MAX) });
+  } catch {}
+  emit('diag', row);
+  return row;
+}
+
+async function readDiag() {
+  try {
+    const data = await chrome.storage.local.get(DIAG_KEY);
+    return Array.isArray(data[DIAG_KEY]) ? data[DIAG_KEY] : [];
+  } catch {
+    return [];
+  }
+}
+
+function pageDocument(snapshot = {}) {
+  const feed = Array.isArray(snapshot.feed) ? snapshot.feed : [];
+  const readable = String(snapshot.text || snapshot.summary?.text || '').trim();
+  const parts = [];
+  if (feed.length) {
+    parts.push('[VISIBLE POSTS]\n' + feed.map((post) => {
+      const who = post.user ? `${post.user}\n` : '';
+      return `${who}${post.text || ''}`.trim();
+    }).filter(Boolean).join('\n\n'));
+  }
+  if (readable) parts.push(readable);
+  const joined = parts.join('\n\n').trim();
+  const words = (joined.match(/[A-Za-z]{3,}/g) || []).length;
+  if (words >= 12) return joined;
+  const dom = String(snapshot.dom || '').trim();
+  return [joined, dom].filter(Boolean).join('\n\n').trim();
+}
+
 const relay = new EventTarget();
 function emit(type, payload) { relay.dispatchEvent(new CustomEvent(type, { detail: payload })); }
 
@@ -133,7 +181,10 @@ async function handleEvent(evt) {
       if (threadId) persistThreadId(threadId);
       emit('agent-state', { phase: 'running' });
     } else if (evt.type === 'RUN_FINISHED') emit('agent-state', { phase: 'done' });
-    else if (evt.type === 'RUN_ERROR') emit('agent-state', { phase: 'error' });
+    else if (evt.type === 'RUN_ERROR') {
+      emit('agent-state', { phase: 'error' });
+      pushDiag({ level: 'error', source: 'hermes', message: evt.message || evt.error || 'RUN_ERROR' });
+    }
   } catch (e) {
     console.error('[Hermes] handleEvent', e);
   }
@@ -265,17 +316,29 @@ async function snapshotTab(tabId, opts = {}) {
     }).then((results) => results?.[0]?.result || null).catch(() => null);
   }
 
+  if ((!resp?.ok || resp?.snapshot?.thin) && /x\.com|twitter\.com/i.test(String(tab.url || '')) && !opts.retried) {
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    return snapshotTab(tab.id, { ...opts, retried: true, fresh: true });
+  }
+
   if (resp?.ok && resp.snapshot) {
     lastSnapshot = { tabId: tab.id, url: tab.url, title: tab.title, snapshot: resp.snapshot };
+    const words = Number(resp.snapshot.wordCount) || (String(resp.snapshot.text || resp.snapshot.dom || '').match(/[A-Za-z]{3,}/g) || []).length;
+    pushDiag({
+      level: resp.snapshot.thin || words < 12 ? 'warn' : 'info',
+      source: 'attach',
+      message: resp.snapshot.thin || words < 12 ? 'Thin page snapshot — Hermes may not see this page' : 'Attached page snapshot',
+      extra: { url: tab.url, title: tab.title, words, posts: Array.isArray(resp.snapshot.feed) ? resp.snapshot.feed.length : 0, host: resp.snapshot.host || '' }
+    });
     emit('page-snapshot', lastSnapshot);
     return lastSnapshot;
   }
   if (resp?.url && resp.title) {
-    // Used for the inline MAIN-world fallback above.
     lastSnapshot = { tabId: tab.id, url: tab.url, title: tab.title, snapshot: resp };
     emit('page-snapshot', lastSnapshot);
     return lastSnapshot;
   }
+  pushDiag({ level: 'error', source: 'attach', message: 'Could not read the page', extra: { url: tab.url, title: tab.title } });
   return null;
 }
 
@@ -317,13 +380,31 @@ function capturePageInline() {
       };
     });
     const text = clean((document.body && (document.body.innerText || document.body.textContent)) || '').slice(0, 12000);
+    const feed = [];
+    const seen = new Set();
+    for (const article of visible('article[data-testid="tweet"], article[role="article"]', 40)) {
+      const node = article.querySelector('[data-testid="tweetText"]') || article;
+      const post = clean(node.innerText || node.textContent || '').slice(0, 800);
+      if (!post || seen.has(post)) continue;
+      seen.add(post);
+      feed.push({
+        user: clean(article.querySelector('[data-testid="User-Name"]')?.innerText || '').slice(0, 160),
+        time: article.querySelector('time')?.getAttribute('datetime') || '',
+        text: post
+      });
+    }
+    const readable = feed.length ? feed.map((post) => `${post.user ? post.user + '\n' : ''}${post.text}`).join('\n\n') : text;
     return {
       ok: true,
       snapshot: {
         url: location.href,
         title: document.title,
-        text,
-        dom: text,
+        text: readable,
+        dom: readable || text,
+        feed,
+        host: /x\.com|twitter\.com/i.test(location.hostname) ? 'x' : 'web',
+        thin: (readable.match(/[A-Za-z]{3,}/g) || []).length < 12,
+        wordCount: (readable.match(/[A-Za-z]{3,}/g) || []).length,
         interactive,
         accessibility: visible('h1,h2,h3,a,button,input,select,textarea,[role="button"],[role="link"]').map((node) => {
           const ref = node.getAttribute('data-hermes-ref') || '';
@@ -504,13 +585,11 @@ async function chat(userText, opts = {}) {
   if (shouldAttachPage) {
     let snapshot = null;
     try { snapshot = await snapshotTab(opts.tabId); } catch (error) {
+      pushDiag({ level: 'error', source: 'attach', message: String(error) });
       emit('page-context-status', { ok: false, error: String(error) });
     }
     if (snapshot?.snapshot) {
-      const dom = snapshot.snapshot.dom || '';
-      // MAIN-world inline fallback exposes .text instead of .dom; surface it so
-      // Hermes still gets the actual page body on pages without content scripts.
-      const doc = dom || snapshot.snapshot.text || '';
+      const doc = pageDocument(snapshot.snapshot);
       const interactive = (snapshot.snapshot.interactive || []).slice(0, 200);
       const maxDomChars = Math.max(5000, Math.min(100000, Number(cfg.maxDomChars) || 30000));
       extra.attachPage = true;
@@ -523,10 +602,20 @@ async function chat(userText, opts = {}) {
         document: doc.slice(0, maxDomChars),
         accessibility: snapshot.snapshot.accessibility || '',
         signals: snapshot.snapshot.signals || [],
+        feed: snapshot.snapshot.feed || [],
         interactive,
         time: Date.now()
       }];
-      emit('page-context-status', { ok: true, url: snapshot.url, title: snapshot.title, interactive: interactive.length });
+      const words = (doc.match(/[A-Za-z]{3,}/g) || []).length;
+      emit('page-context-status', {
+        ok: true,
+        url: snapshot.url,
+        title: snapshot.title,
+        interactive: interactive.length,
+        words,
+        posts: Array.isArray(snapshot.snapshot.feed) ? snapshot.snapshot.feed.length : 0,
+        thin: words < 12 || snapshot.snapshot.thin
+      });
     } else if (shouldAttachPage) {
       emit('page-context-status', { ok: false, error: 'Could not read the active page. It may be a restricted browser page.' });
     }
@@ -553,6 +642,7 @@ async function chat(userText, opts = {}) {
     return result;
   } catch (e) {
     const aborted = e?.name === 'AbortError' || /abort/i.test(String(e?.message || e));
+    if (!aborted) pushDiag({ level: 'error', source: 'chat', message: String(e) });
     if (!announceRunEnd(generation, { ok: false, aborted, error: aborted ? 'stopped' : String(e) })) {
       return { aborted: true };
     }
@@ -649,6 +739,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
       return true;
     }
+    case 'log-diag': {
+      pushDiag({
+        level: msg.level || 'info',
+        source: msg.source || 'settings',
+        message: msg.message || '',
+        extra: msg.extra || null
+      }).then((row) => sendResponse({ ok: true, row })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    case 'get-diag': {
+      readDiag().then((log) => sendResponse({
+        ok: true,
+        log,
+        snapshot: lastSnapshot ? {
+          url: lastSnapshot.url,
+          title: lastSnapshot.title,
+          thin: Boolean(lastSnapshot.snapshot?.thin),
+          words: lastSnapshot.snapshot?.wordCount || 0,
+          posts: Array.isArray(lastSnapshot.snapshot?.feed) ? lastSnapshot.snapshot.feed.length : 0
+        } : null,
+        threadId: currentThreadId,
+        bridgeConnected: bridgeWs?.readyState === WebSocket.OPEN,
+        clientBusy: client ? client.busy : false
+      })).catch((e) => sendResponse({ ok: false, error: String(e), log: [] }));
+      return true;
+    }
+    case 'clear-diag': {
+      chrome.storage.local.set({ [DIAG_KEY]: [] }).then(() => sendResponse({ ok: true, log: [] })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
     case 'get-state': {
       sendResponse({
         ok: true,
@@ -718,6 +838,7 @@ relay.addEventListener('page-context-status', (e) => relayToPorts('page-context-
 relay.addEventListener('bridge-status', (e) => relayToPorts('bridge-status', e.detail));
 relay.addEventListener('agent-state', (e) => relayToPorts('agent-state', e.detail));
 relay.addEventListener('runtime', (e) => relayToPorts('runtime', { runtime: e.detail }));
+relay.addEventListener('diag', (e) => relayToPorts('diag', e.detail));
 
 if (chrome.tabs?.onRemoved) {
   chrome.tabs.onRemoved.addListener((tabId) => {

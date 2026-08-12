@@ -34,6 +34,11 @@ const html = `<!doctype html>
   <img id="hero" src="https://example.com/hero.png" alt="Hero image" width="640" height="320" />
   <div style="display:none"><button>Hidden Button</button></div>
   <button id="below-fold" style="position:absolute;top:5000px;left:0">Below Fold</button>
+  <article data-testid="tweet" role="article">
+    <div data-testid="User-Name">Ada Lovelace @ada</div>
+    <time datetime="2026-08-12T12:00:00.000Z"></time>
+    <div data-testid="tweetText">Shipped a real browser HUD and it actually reads this post.</div>
+  </article>
 </body>
 </html>`;
 
@@ -139,6 +144,8 @@ const snap = reader.readPage();
 ok(snap.url === 'https://example.com/test-page', 'readPage captures URL');
 ok(snap.title === 'Test Page', 'readPage captures title');
 ok(String(snap.summary.text).includes('Welcome to the test page'), 'readPage extracts body text');
+ok(Array.isArray(snap.feed) && snap.feed.some((post) => String(post.text).includes('reads this post')), 'readPage extracts X-style tweet text');
+ok(String(snap.dom || snap.text).includes('reads this post'), 'readable snapshot prefers tweet text over empty CSS wrappers');
 ok(Array.isArray(snap.interactive) && snap.interactive.length >= 6, 'collectInteractive finds built-in controls (got ' + (snap.interactive || []).length + ')');
 const link = snap.interactive.find((i) => i.href && i.href.includes('/about'));
 ok(!!link && !!(link.selector || link.text), 'interactive map exposes a link with selector/text');

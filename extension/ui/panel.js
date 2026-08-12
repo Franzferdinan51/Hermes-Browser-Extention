@@ -593,7 +593,8 @@ function connectPort() {
       updatePageBar();
     } else if (m.kind === 'page-context-status') {
       if (m.ok) {
-        runLabel(`Pinned to this tab · ${m.interactive || 0} controls`);
+        if (m.thin) runLabel(`Weak page read · ${m.words || 0} words${m.posts ? ` · ${m.posts} posts` : ''}`);
+        else runLabel(`Pinned to this tab · ${m.interactive || 0} controls${m.posts ? ` · ${m.posts} posts` : ''}`);
         if (m.title || m.url) {
           $('pageTitle').textContent = m.title || m.url;
           $('pageTitle').title = m.url || '';
