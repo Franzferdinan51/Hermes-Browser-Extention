@@ -3,7 +3,7 @@
  * SSE server. Fails if abort is a no-op (the run would hang until timeout).
  */
 import http from 'node:http';
-import { AGUIClient, abortSucceeded } from '../../extension/lib/agui-client.js';
+import { AGUIClient, abortSucceeded, isLiveGeneration, shouldIdleComposer } from '../../extension/lib/agui-client.js';
 
 let passed = 0;
 let failed = 0;
@@ -24,6 +24,17 @@ const client = new AGUIClient({ url: `http://127.0.0.1:${port}/agent` });
 
 ok(abortSucceeded({ ok: true, aborted: false }) === false, 'ok:true without aborted is not a successful stop');
 ok(abortSucceeded({ ok: true, aborted: true }) === true, 'aborted:true is a successful stop');
+ok(isLiveGeneration(1, 2) === false, 'isLiveGeneration is false for stale generation A after B starts');
+ok(isLiveGeneration(2, 2) === true, 'isLiveGeneration is true for live generation B');
+ok(shouldIdleComposer(1, 2) === false, 'shouldIdleComposer does not idle B for stale send A');
+ok(shouldIdleComposer(2, 2) === true, 'shouldIdleComposer idles only the live send');
+const raceTokens = new AGUIClient({ url: 'http://127.0.0.1:1/unused' });
+const tokenA = raceTokens.prepareRun();
+const tokenB = raceTokens.prepareRun();
+ok(isLiveGeneration(tokenA, raceTokens.activeGeneration) === false, 'stale prepareRun A is not the live generation');
+ok(isLiveGeneration(tokenB, raceTokens.activeGeneration) === true, 'prepareRun B is the live generation');
+ok(shouldIdleComposer(tokenA || tokenB, tokenB) === false, 'stale send token A cannot hide live Stop');
+ok(shouldIdleComposer(tokenB || tokenB, tokenB) === true, 'live send token B may clear the composer');
 ok(client.abortRun() === true, 'abortRun records a cancel even before prepareRun');
 ok(client.wasCanceled() === true, 'wasCanceled is true after abortRun');
 

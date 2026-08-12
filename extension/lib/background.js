@@ -5,7 +5,7 @@
  * browser-tool execution, Hermes runtime discovery, and UI event relaying.
  */
 
-import { AGUIClient } from './agui-client.js';
+import { AGUIClient, isLiveGeneration } from './agui-client.js';
 import { runChromeTool } from './browser-chrome.js';
 import { readThreadId } from './thread.js';
 
@@ -468,13 +468,18 @@ async function runActionOnTab(action, tabId, depth = 0) {
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
+function announceRunEnd(generation, payload) {
+  if (!isLiveGeneration(generation, client?.activeGeneration)) return false;
+  emit('run-end', payload);
+  return true;
+}
+
 function abortedResult(generation) {
-  if (client && (generation == null || client.activeGeneration === generation)) {
-    client.busy = false;
-    client.cancelRequested = false;
-    client.abort = null;
-  }
-  emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+  if (!isLiveGeneration(generation, client?.activeGeneration)) return { aborted: true };
+  client.busy = false;
+  client.cancelRequested = false;
+  client.abort = null;
+  announceRunEnd(generation, { ok: false, aborted: true, error: 'stopped' });
   return { aborted: true };
 }
 
@@ -543,15 +548,14 @@ async function chat(userText, opts = {}) {
     const result = await client.runAgent(input, { generation });
     if (result.state?.threadId) persistThreadId(result.state.threadId);
     else if (input.threadId) persistThreadId(input.threadId);
-    emit('run-end', { ok: true, result });
+    if (!announceRunEnd(generation, { ok: true, result })) return { aborted: true };
     return result;
   } catch (e) {
     const aborted = e?.name === 'AbortError' || /abort/i.test(String(e?.message || e));
-    if (aborted) {
-      if (client.activeGeneration === generation) emit('run-end', { ok: false, aborted: true, error: 'stopped' });
+    if (!announceRunEnd(generation, { ok: false, aborted, error: aborted ? 'stopped' : String(e) })) {
       return { aborted: true };
     }
-    emit('run-end', { ok: false, aborted: false, error: String(e) });
+    if (aborted) return { aborted: true };
     throw e;
   }
 }

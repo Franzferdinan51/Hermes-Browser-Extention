@@ -66,6 +66,16 @@ export function abortSucceeded(response) {
   return Boolean(response && response.aborted);
 }
 
+/** True only while this run generation is still the active one. */
+export function isLiveGeneration(generation, activeGeneration) {
+  return generation != null && generation === activeGeneration;
+}
+
+/** True only while this Send is still the live composer turn. */
+export function shouldIdleComposer(sendToken, liveSendToken) {
+  return sendToken != null && sendToken === liveSendToken;
+}
+
 /**
  * AGUIClient — connects to an AG-UI compatible agent endpoint (local Hermes
  * bridge or BrowserOS) and streams events.

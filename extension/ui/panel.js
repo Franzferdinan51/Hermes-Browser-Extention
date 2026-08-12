@@ -1,7 +1,7 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
 import { readThreadId, buildChatRequest } from '../lib/thread.js';
-import { abortSucceeded } from '../lib/agui-client.js';
+import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
 
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
@@ -9,6 +9,7 @@ const emptyEl = $('empty');
 
 let port = null;
 let busy = false;
+let liveSend = 0;
 let config = null;
 let allModels = [];
 let selectedModelId = '';
@@ -512,14 +513,14 @@ function handleEvent(e) {
       flushText();
       finalizeStream();
       finalizeOpenTools(true);
-      setComposerBusy(false, 'done');
+      idleComposer(undefined, 'done');
       setTimeout(() => { if (!busy) runLabel(''); }, 1400);
       break;
     case 'RUN_ERROR':
       flushText();
       finalizeStream();
       finalizeOpenTools(false, e.error || e.message);
-      setComposerBusy(false, 'error');
+      idleComposer(undefined, 'error');
       showError(e.error || e.message || 'unknown');
       break;
     default:
@@ -537,6 +538,10 @@ function setComposerBusy(on, label) {
   if (label !== undefined) runLabel(label);
 }
 
+function idleComposer(sendToken, label) {
+  if (shouldIdleComposer(sendToken || liveSend, liveSend)) setComposerBusy(false, label);
+}
+
 async function stopRun() {
   if (!busy) return;
   runLabel('Stopping…');
@@ -548,7 +553,7 @@ async function stopRun() {
   flushText();
   finalizeStream();
   finalizeOpenTools(false, 'stopped');
-  setComposerBusy(false, 'stopped');
+  idleComposer(undefined, 'stopped');
 }
 
 function setStatus(state) {
@@ -577,9 +582,9 @@ function connectPort() {
         flushText();
         finalizeStream();
         finalizeOpenTools(false, 'stopped');
-        setComposerBusy(false, 'stopped');
+        idleComposer(undefined, 'stopped');
       } else {
-        setComposerBusy(false, m.ok === false ? 'error' : 'done');
+        idleComposer(undefined, m.ok === false ? 'error' : 'done');
       }
     } else if (m.kind === 'page-snapshot' && m.snapshot) {
       updatePageBar();
@@ -726,6 +731,7 @@ async function chooseModel() {
 async function send() {
   const text = $('prompt').value.trim();
   if (!text || busy) return;
+  const sendToken = ++liveSend;
   $('prompt').value = '';
   autoGrow();
   emptyEl.style.display = 'none';
@@ -738,19 +744,19 @@ async function send() {
       modelProvider: selectedProvider || config?.modelProvider || ''
     }));
     if (response?.aborted) {
-      setComposerBusy(false, 'stopped');
+      idleComposer(sendToken, 'stopped');
       return;
     }
     if (response && !response.ok) throw new Error(response.error || 'Chat request failed');
   } catch (e) {
     if (/abort/i.test(String(e?.message || e))) {
-      setComposerBusy(false, 'stopped');
+      idleComposer(sendToken, 'stopped');
       return;
     }
     showError(e);
-    setComposerBusy(false, 'error');
+    idleComposer(sendToken, 'error');
   } finally {
-    if (busy) setComposerBusy(false);
+    if (shouldIdleComposer(sendToken || liveSend, liveSend)) setComposerBusy(false);
   }
 }
 

@@ -1,5 +1,7 @@
 // popup.js — compact chat popup. Streams AG-UI events via the runtime port and
 // renders simple assistant/user/tool bubbles. Keeps the SW alive while open.
+import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
+
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 
@@ -13,6 +15,7 @@ function appendMsg(cls, text) {
 
 let port = null;
 let busy = false;
+let liveSend = 0;
 
 function setStatus(dot, text) {
   $('dot').className = 'dot ' + dot;
@@ -42,21 +45,24 @@ async function refresh() {
   }
 }
 
+function setPopupBusy(on, label) {
+  busy = !!on;
+  $('send').hidden = busy;
+  $('btnStop').hidden = !busy;
+  if (label !== undefined) setStatus(busy ? 'busy' : 'ok', label);
+}
+
 async function send() {
   const text = $('prompt').value.trim();
   if (!text || busy) return;
+  const sendToken = ++liveSend;
   $('prompt').value = '';
   appendMsg('user', text);
-  busy = true;
-  $('send').hidden = true;
-  $('btnStop').hidden = false;
-  setStatus('busy', 'running…');
+  setPopupBusy(true, 'running…');
   const r = await chrome.runtime.sendMessage({ kind: 'chat', text }).catch((e) => ({ ok: false, error: String(e) }));
-  $('send').hidden = false;
-  $('btnStop').hidden = true;
+  if (!shouldIdleComposer(sendToken || liveSend, liveSend)) return;
   if (r?.aborted) {
-    setStatus('ok', 'stopped');
-    busy = false;
+    setPopupBusy(false, 'stopped');
     return;
   }
   if (r && r.ok) {
@@ -64,20 +70,17 @@ async function send() {
     const msgs = (r.r && r.r.messages) || [];
     const asst = msgs.filter((m) => m.role !== 'user').map((m) => m.text || '').filter(Boolean).join('');
     if (asst) appendMsg('assistant', asst);
-    setStatus('ok', 'done');
+    setPopupBusy(false, 'done');
   } else {
     appendMsg('err', 'Error: ' + (r && r.error ? r.error : 'unknown'));
-    setStatus('err', 'error');
+    setPopupBusy(false, 'error');
   }
-  busy = false;
 }
 
 $('btnStop').addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
-  busy = false;
-  $('send').hidden = false;
-  $('btnStop').hidden = true;
-  setStatus('ok', 'stopped');
+  const response = await chrome.runtime.sendMessage({ kind: 'abort-run' }).catch(() => null);
+  if (!abortSucceeded(response)) return;
+  if (shouldIdleComposer(liveSend, liveSend)) setPopupBusy(false, 'stopped');
 });
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
