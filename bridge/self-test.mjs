@@ -118,6 +118,12 @@ const fake = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+    if (prompt.includes('OPEN_IN_CHROME_PROBE')) {
+      emit('tool_call', { tool_call_id: 'topen', name: 'browser_new_page', args: { url: 'https://news.example/pixel-11' } });
+      emit('done', {});
+      res.end();
+      return;
+    }
     if (prompt.includes('ATTACH_STAY_PROBE')) {
       emit('tool_call', { tool_call_id: 'ts1', name: 'web_search', args: { query: 'example domain' } });
       emit('tool_call', { tool_call_id: 'ts2', name: 'browser_navigate', args: { url: 'https://www.google.com/search?q=example' } });
@@ -357,6 +363,7 @@ async function main() {
   ok(firstChatPrompt.includes('[PAGE CONTEXT]') && firstChatPrompt.includes('https://example.com'), 'Hermes prompt includes page context');
   ok(firstChatPrompt.includes('[ATTACHED LIVE TAB]') && firstChatPrompt.includes('Do not call web_search'), 'attached page is bound to the live Chrome tab');
   ok(firstChatPrompt.includes('[WORKING BROWSER]') && firstChatPrompt.includes('already inside the user\'s real Chrome'), 'attached turn tells Hermes to work in this Chrome tab');
+  ok(firstChatPrompt.includes('New tabs here are allowed') && !/Do not call browser_new_page/i.test(firstChatPrompt), 'attached workspace allows new tabs in this Chrome');
   ok(!/prefer web_search\/web_extract for simple information retrieval/i.test(firstChatPrompt), 'attached page does not tell Hermes to search another browser');
   ok(sentMessage.includes('[VERIFIED ACTIVE TAB RESULTS]') && sentMessage.includes('Fake active tab'), 'next turn receives verified active-tab result');
   ok(sentMessage.includes('[WORKING BROWSER]') && sentMessage.includes('https://example.com'), 'follow-up stays bound to the attached Chrome tab');
@@ -440,8 +447,30 @@ async function main() {
   ok(stayActions.length >= 1 && stayActions.every((msg) => msg.tabId === 42), 'stay-on-tab actions are pinned to the attached tab');
   ok(stayActions.some((msg) => msg.action?.name === 'grep' && String(msg.action?.params?.pattern || '').includes('example')), 'web_search is rewritten to search the attached page');
   ok(!stayActions.some((msg) => msg.action?.name === 'navigate' && /google|bing/i.test(String(msg.action?.params?.url || ''))), 'search-engine navigate is not sent to another browser');
-  ok(!stayActions.some((msg) => msg.action?.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(msg.action?.params?.action || ''))), 'new-page is not opened while a tab is attached');
+  ok(!stayActions.some((msg) => msg.action?.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(msg.action?.params?.action || ''))), 'unprompted new-page is not opened while summarizing the attached tab');
   ok(stayActions.some((msg) => msg.action?.name === 'snapshot' || msg.action?.name === 'page_content' || msg.action?.name === 'grep'), 'leave-tab tools stay on the attached page');
+
+  const beforeOpen = companionActions.length;
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      attachPage: true,
+      attachedTab: { id: 42, url: 'https://example.com/attached', title: 'Attached' },
+      context: [{
+        type: 'page_context',
+        url: 'https://example.com/attached',
+        title: 'Attached',
+        tabId: 42,
+        document: '<h1>Stay here</h1>'
+      }],
+      messages: [{ role: 'user', content: 'OPEN_IN_CHROME_PROBE open a new tab in this Chrome to https://news.example/pixel-11' }]
+    })
+  })).text();
+  const openActions = companionActions.slice(beforeOpen);
+  ok(openActions.some((msg) => msg.action?.name === 'tabs' && msg.action?.params?.action === 'create' && String(msg.action?.params?.url || '').includes('news.example/pixel-11')), 'an explicit open-tab request creates a tab in the attached Chrome');
+  ok(openActions.some((msg) => msg.action?.params?.openerTabId === 42 || msg.tabId === 42), 'the new tab is opened from the attached Chrome tab');
 
   const beforeRun = companionActions.length;
   await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {

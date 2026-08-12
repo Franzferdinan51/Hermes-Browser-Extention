@@ -266,11 +266,12 @@ function workingBrowserBlock(pin) {
   ].filter(Boolean).join(' · ');
   return (
     `[WORKING BROWSER]\n` +
-    `You are already inside the user's real Chrome (${where || 'attached tab'}).\n` +
-    `This attached tab is your only browser. Do all reading and clicking here.\n` +
-    `Do not open Hermes' internal browser, a headless browser, Browserbase, or another window.\n` +
-    `Do not call web_search, web_extract, browser_navigate, browser_new_page, or browser_exec unless the user explicitly asks to leave this tab.\n` +
-    `If you need more of THIS page, use browser_snapshot, browser_page_content, browser_read, browser_scroll, browser_grep, browser_click, or browser_type. The companion runs those in the attached tab.`
+    `You are already inside the user's real Chrome (${where || 'attached tab'}). That Chrome window is your workspace.\n` +
+    `Sandbox: stay in this Chrome profile. Do not open Hermes' internal browser, Playwright, a headless browser, Browserbase, or any other browser.\n` +
+    `Default: read and click on the attached tab.\n` +
+    `If the user asks to open a tab, a link, or another page, do it in THIS Chrome with browser_tabs(action=create, url=https://...) or browser_navigate. New tabs here are allowed.\n` +
+    `Do not call web_search or web_extract just to re-read this page. Do not call browser_exec.\n` +
+    `If you need more of THIS page, use browser_snapshot, browser_page_content, browser_read, browser_scroll, browser_grep, browser_click, or browser_type.`
   );
 }
 
@@ -287,8 +288,17 @@ function lastUserText(input = {}) {
 }
 
 function userAskedToLeaveAttachedTab(input = {}) {
-  return /\b(search the web|search online|google this|look(?:\s+it)?\s+up online|open (?:a )?new (?:tab|window|browser)|go to https?:\/\/|navigate to https?:\/\/|leave this (?:tab|page)|in another (?:tab|browser|window))\b/i
+  return /\b(search the web|search online|google this|look(?:\s+it)?\s+up online|leave this (?:tab|page)|in another browser|use (?:hermes'?|the) (?:internal |headless )?browser)\b/i
     .test(lastUserText(input));
+}
+
+function userAskedForChromeWorkspace(input = {}) {
+  return /\b(open (?:a |the |this |that )?(?:new )?(?:tab|window)|new tab|another tab|sibling tab|in (?:a )?(?:new )?tab|in this (?:chrome|browser)|attached browser|open (?:the )?(?:link|article|url|page)|go to https?:\/\/|navigate to|browse to|visit https?:\/\/|take me to|open https?:\/\/)\b/i
+    .test(lastUserText(input));
+}
+
+function userAllowsChromeNavigation(input = {}) {
+  return userAskedToLeaveAttachedTab(input) || userAskedForChromeWorkspace(input);
 }
 
 function isSearchEngineUrl(value) {
@@ -333,9 +343,10 @@ function stayOnPageAction(query) {
 }
 
 function rewriteOffTabTool(toolName, args, pin, input) {
-  if (!pin.attached || userAskedToLeaveAttachedTab(input)) return null;
+  if (!pin.attached) return null;
   const n = canonicalToolName(toolName);
   if (n === 'web_search' || n === 'web_extract') {
+    if (userAskedToLeaveAttachedTab(input)) return null;
     return stayOnPageAction(args.query || args.q || args.url || args.text || args.pattern);
   }
   if (n === 'browser_exec' || n === 'browser_run') {
@@ -349,7 +360,20 @@ function rewriteOffTabTool(toolName, args, pin, input) {
 }
 
 function stayOnAttachedTab(action, pin, input) {
-  if (!pin.attached || !action || userAskedToLeaveAttachedTab(input)) return action;
+  if (!pin.attached || !action) return action;
+  if (userAllowsChromeNavigation(input)) {
+    if (action.name === 'tabs' && /^(create|new|open|new_page)$/i.test(String(action.params?.action || ''))) {
+      return {
+        name: 'tabs',
+        params: {
+          ...action.params,
+          action: 'create',
+          openerTabId: action.params?.openerTabId ?? pin.tabId
+        }
+      };
+    }
+    return action;
+  }
   if (action.name === 'navigate') {
     const url = String(action.params?.url || '');
     if (isSearchEngineUrl(url)) return stayOnPageAction(queryFromSearchUrl(url));
@@ -1088,14 +1112,13 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     const tabId = pin.tabId ?? pageContext?.tabId ?? input.attachedTab?.id;
     parts.push(
       `[ATTACHED LIVE TAB]\n` +
-      `The user attached their real Chrome tab${tabId != null ? ` #${tabId}` : ''}${url ? ` (${url})` : ''}. This is not a Hermes-internal, headless, or secondary browser.\n` +
-      `Stay in this tab. Do not open Hermes' internal browser, a headless browser, or another window.\n` +
-      `Answer from [PAGE CONTEXT] first.\n` +
+      `The user attached their real Chrome tab${tabId != null ? ` #${tabId}` : ''}${url ? ` (${url})` : ''}. This Chrome window is your workspace, not a Hermes-internal or headless browser.\n` +
+      `Sandbox: never open Hermes' internal browser, Playwright, Browserbase, or another product. Only act in this Chrome.\n` +
+      `Answer from [PAGE CONTEXT] first. Click and read on this tab by default.\n` +
+      `If the user asks to open a tab, article, or URL, use browser_tabs(action=create, url=https://...) or browser_navigate in THIS Chrome. That is allowed.\n` +
       `Do not call web_search or web_extract to re-fetch this page.\n` +
-      `Do not browser_navigate to this same URL or to a search engine unless the user explicitly asks to leave this tab.\n` +
-      `Do not call browser_new_page or create/switch tabs or windows.\n` +
-      `If you need more of the page, call browser_snapshot, browser_page_content, browser_read, browser_scroll, or browser_grep. The companion will run those in the attached tab.\n` +
-      `Only use web_search if the user asks for information that is clearly not on this page.`
+      `Do not browser_navigate to this same URL or to a search engine unless the user asks.\n` +
+      `If you need more of the page, call browser_snapshot, browser_page_content, browser_read, browser_scroll, or browser_grep.`
     );
   }
 
@@ -1187,7 +1210,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
     (attached
-      ? 'You are already in the attached Chrome tab. Use @e1 refs and companion-mirrored browser tools on THAT tab only. Do not open another browser. Search/navigate-away calls are rewritten onto this tab. '
+      ? 'You are already in the user\'s real Chrome. Default to the attached tab and @e1 refs. If they ask to open a tab or URL, do it in this Chrome. Do not open another browser product. Unprompted search/navigate-away calls stay on this tab. '
       : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
     'Answer the user in plain language first. Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );

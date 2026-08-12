@@ -556,7 +556,17 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
       };
     }
     case 'tabs':
-    case 'pages':
+    case 'pages': {
+      const result = await runChromeTool(name, params, tabId);
+      const createdId = result?.value?.id;
+      const verb = String(params.action || params.name || '').toLowerCase();
+      if (result?.ok && createdId != null && /^(create|new|open|new_page)$/.test(verb)) {
+        pinOwnedTab({ id: createdId, url: result.value.url, title: result.value.title });
+        lastSnapshot = null;
+        scheduleFollow(createdId, 'opened');
+      }
+      return result;
+    }
     case 'windows':
     case 'tab_groups':
     case 'tab-groups':

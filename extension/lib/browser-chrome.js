@@ -161,9 +161,16 @@ async function handleTabs(params, tabId) {
     case 'open': {
       const url = params.url ? httpUrl(params.url) : 'about:blank';
       if (params.url && !url) return { ok: false, error: 'New tab requires a valid http(s) URL' };
+      let windowId = params.windowId != null ? Number(params.windowId) : undefined;
+      const openerTabId = params.openerTabId != null ? Number(params.openerTabId) : (id != null ? Number(id) : undefined);
+      if (windowId == null && openerTabId != null) {
+        const opener = await chrome.tabs.get(openerTabId).catch(() => null);
+        if (opener?.windowId != null) windowId = opener.windowId;
+      }
       const created = await chrome.tabs.create({
         url,
-        windowId: params.windowId != null ? Number(params.windowId) : undefined,
+        windowId,
+        openerTabId: openerTabId != null && Number.isFinite(openerTabId) ? openerTabId : undefined,
         active: params.active !== false,
         index: params.index != null ? Number(params.index) : undefined,
         pinned: !!params.pinned
