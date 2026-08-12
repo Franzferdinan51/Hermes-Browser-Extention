@@ -625,6 +625,169 @@ function actionViewport() {
   };
 }
 
+async function actionDblclick(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  await sleep(40);
+  fireMouse(target, 'mousedown', { button: 0, detail: 1 });
+  fireMouse(target, 'mouseup', { button: 0, detail: 1 });
+  fireMouse(target, 'click', { button: 0, detail: 1 });
+  fireMouse(target, 'mousedown', { button: 0, detail: 2 });
+  fireMouse(target, 'mouseup', { button: 0, detail: 2 });
+  fireMouse(target, 'dblclick', { button: 0, detail: 2 });
+  return { ok: true, value: `double-clicked ${selector}` };
+}
+
+async function actionRightClick(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  await sleep(40);
+  fireMouse(target, 'pointerdown', { button: 2 });
+  fireMouse(target, 'mousedown', { button: 2 });
+  fireMouse(target, 'mouseup', { button: 2 });
+  fireMouse(target, 'contextmenu', { button: 2 });
+  return { ok: true, value: `right-clicked ${selector}` };
+}
+
+function actionForms() {
+  const forms = Array.from(document.forms || []).map((form, index) => ({
+    index,
+    id: form.id || '',
+    name: form.getAttribute('name') || '',
+    action: form.action || '',
+    method: (form.method || 'get').toLowerCase(),
+    fields: Array.from(form.elements || []).slice(0, 40).map((node) => ({
+      tag: node.tagName.toLowerCase(),
+      type: node.type || '',
+      name: node.name || '',
+      id: node.id || '',
+      ref: node.getAttribute('data-hermes-ref') ? `@${node.getAttribute('data-hermes-ref')}` : undefined,
+      value: node.type === 'password' ? '' : String(node.value || '').slice(0, 120)
+    }))
+  }));
+  return { ok: true, value: forms, count: forms.length };
+}
+
+function actionTables(p = {}) {
+  const limit = Math.min(Math.max(Number(p.limit) || 8, 1), 20);
+  const tables = Array.from(document.querySelectorAll('table')).slice(0, limit).map((table, index) => {
+    const rows = Array.from(table.querySelectorAll('tr')).slice(0, 30).map((row) => (
+      Array.from(row.querySelectorAll('th,td')).slice(0, 16).map((cell) => cleanText(cell.textContent).slice(0, 120))
+    ));
+    return { index, caption: cleanText(table.caption?.textContent || '').slice(0, 160), rows };
+  });
+  return { ok: true, value: tables, count: tables.length };
+}
+
+function actionMeta() {
+  const attr = (sel) => document.querySelector(sel)?.getAttribute('content') || document.querySelector(sel)?.getAttribute('href') || '';
+  return {
+    ok: true,
+    value: {
+      url: location.href,
+      title: document.title,
+      description: attr('meta[name="description"]') || attr('meta[property="og:description"]'),
+      canonical: document.querySelector('link[rel="canonical"]')?.href || '',
+      ogTitle: attr('meta[property="og:title"]'),
+      ogImage: attr('meta[property="og:image"]'),
+      lang: document.documentElement.lang || ''
+    }
+  };
+}
+
+function actionSelection() {
+  const text = cleanText(String(document.getSelection?.()?.toString() || ''));
+  return { ok: true, value: text.slice(0, OUTPUT_LIMIT), empty: !text };
+}
+
+function actionHighlight(p = {}) {
+  const needle = String(p.text || p.query || p.pattern || '').trim();
+  if (!needle) return { ok: false, error: 'highlight requires text' };
+  if (typeof window.find === 'function') {
+    const found = window.find(needle, false, false, true);
+    return { ok: true, value: found ? `highlighted ${needle}` : `no match for ${needle}`, found: !!found };
+  }
+  return actionFind({ text: needle });
+}
+
+function actionFrames() {
+  const frames = Array.from(document.querySelectorAll('iframe,frame')).map((node, index) => ({
+    index,
+    src: node.src || '',
+    name: node.name || '',
+    title: node.title || '',
+    ref: node.getAttribute('data-hermes-ref') ? `@${node.getAttribute('data-hermes-ref')}` : undefined
+  }));
+  return { ok: true, value: frames, count: frames.length };
+}
+
+function actionStorage(p = {}) {
+  const which = String(p.store || p.area || 'local').toLowerCase().includes('session') ? 'sessionStorage' : 'localStorage';
+  let store;
+  try { store = which === 'sessionStorage' ? sessionStorage : localStorage; }
+  catch (error) { return { ok: false, error: `${which} unavailable: ${error.message}` }; }
+  const action = String(p.action || (p.key && p.value != null ? 'set' : p.key ? 'get' : 'list')).toLowerCase();
+  if (action === 'list') {
+    const keys = [];
+    for (let i = 0; i < store.length && keys.length < 80; i++) keys.push(store.key(i));
+    return { ok: true, value: keys.filter(Boolean), count: store.length };
+  }
+  if (!p.key) return { ok: false, error: 'storage get/set/remove requires key' };
+  if (action === 'get') return { ok: true, value: store.getItem(String(p.key)) };
+  if (action === 'set') {
+    store.setItem(String(p.key), String(p.value ?? p.text ?? ''));
+    return { ok: true, value: `set ${which}.${p.key}` };
+  }
+  if (action === 'remove' || action === 'delete') {
+    store.removeItem(String(p.key));
+    return { ok: true, value: `removed ${which}.${p.key}` };
+  }
+  return { ok: false, error: `Unknown storage action: ${action}` };
+}
+
+function actionAttrs(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  const wanted = Array.isArray(p.names) ? p.names : String(p.names || '').split(',').map((name) => name.trim()).filter(Boolean);
+  const attrs = {};
+  if (wanted.length) {
+    for (const name of wanted) attrs[name] = target.getAttribute(name);
+  } else {
+    for (const node of target.attributes || []) attrs[node.name] = node.value;
+  }
+  return { ok: true, value: { tag: target.tagName.toLowerCase(), attrs } };
+}
+
+function actionCount(p = {}) {
+  const selector = String(p.selector || p.css || '').trim();
+  if (!selector) return { ok: false, error: 'count requires selector' };
+  try { return { ok: true, value: document.querySelectorAll(selector).length, selector }; }
+  catch (error) { return { ok: false, error: `invalid selector: ${error.message}` }; }
+}
+
+function actionScrollIntoView(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  target.scrollIntoView({ block: p.block || 'center', inline: 'nearest', behavior: p.smooth ? 'smooth' : 'auto' });
+  return { ok: true, value: `scrolled ${selector} into view` };
+}
+
+function actionVisible(p = {}) {
+  const selector = targetLabel(p);
+  const target = el(selector);
+  if (!target) return { ok: false, error: `Element not found: ${selector}` };
+  const rect = target.getBoundingClientRect();
+  const style = getComputedStyle(target);
+  const visible = rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
+  return { ok: true, value: { visible, width: rect.width, height: rect.height } };
+}
+
 function actionCdpInfo() {
   return {
     ok: true,
@@ -690,6 +853,19 @@ async function runAction(action) {
       case 'diff': case 'changed': return actionDiff(p);
       case 'evaluate': case 'eval': case 'js': return actionEvaluate(p);
       case 'hold_click': case 'holdclick': case 'long_click': return await actionHoldClick(p);
+      case 'dblclick': case 'double_click': case 'doubleclick': return await actionDblclick(p);
+      case 'right_click': case 'rightclick': case 'contextmenu': return await actionRightClick(p);
+      case 'forms': return actionForms();
+      case 'tables': return actionTables(p);
+      case 'meta': return actionMeta();
+      case 'selection': return actionSelection();
+      case 'highlight': return actionHighlight(p);
+      case 'frames': case 'iframes': return actionFrames();
+      case 'storage': return actionStorage(p);
+      case 'attrs': case 'attributes': return actionAttrs(p);
+      case 'count': return actionCount(p);
+      case 'scroll_into_view': case 'scrollintoview': return actionScrollIntoView(p);
+      case 'visible': case 'is_visible': return actionVisible(p);
       case 'network': return actionNetwork(p);
       case 'find': return actionFind(p);
       case 'clipboard': return await actionClipboard(p);

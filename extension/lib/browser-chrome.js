@@ -545,6 +545,37 @@ async function handleDialog(params, tabId) {
   return runInMainWorld(tabId, readPageHooks, [{}]);
 }
 
+async function handleSessions(params) {
+  if (!chrome.sessions?.getRecentlyClosed) return { ok: false, error: 'sessions permission is not granted' };
+  const action = verb(params, params.sessionId ? 'restore' : 'list');
+  if (action === 'restore') {
+    const restored = await chrome.sessions.restore(params.sessionId ? String(params.sessionId) : undefined);
+    return { ok: true, value: restored };
+  }
+  const items = await chrome.sessions.getRecentlyClosed({ maxResults: Math.min(Number(params.limit) || 25, 25) });
+  return {
+    ok: true,
+    value: items.map((item) => ({
+      lastModified: item.lastModified,
+      tab: item.tab ? { id: item.tab.sessionId, title: item.tab.title || '', url: item.tab.url || '' } : undefined,
+      window: item.window ? { id: item.window.sessionId, tabs: (item.window.tabs || []).length } : undefined
+    }))
+  };
+}
+
+async function handleTopSites() {
+  if (!chrome.topSites?.get) return { ok: false, error: 'topSites permission is not granted' };
+  const sites = await chrome.topSites.get();
+  return { ok: true, value: sites.slice(0, 20).map((site) => ({ title: site.title || '', url: site.url || '' })) };
+}
+
+async function handleDiscard(params, tabId) {
+  const id = targetTabId(params, tabId);
+  if (typeof chrome.tabs.discard !== 'function') return { ok: false, error: 'tabs.discard is unavailable' };
+  const tab = await chrome.tabs.discard(id);
+  return { ok: true, value: tab ? tabSummary(tab) : { id } };
+}
+
 async function handleViewport(params, tabId) {
   const action = verb(params, params.width != null || params.height != null ? 'set' : 'get');
   const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
@@ -611,6 +642,13 @@ export async function runChromeTool(name, params = {}, tabId = null) {
         return await handleZoom(params, tabId);
       case 'viewport':
         return await handleViewport(params, tabId);
+      case 'sessions':
+        return await handleSessions(params);
+      case 'top_sites':
+      case 'topsites':
+        return await handleTopSites();
+      case 'discard':
+        return await handleDiscard(params, tabId);
       default:
         return null;
     }

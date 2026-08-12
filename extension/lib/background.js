@@ -360,6 +360,10 @@ async function runNativeTabAction(name, params, tabId, depth = 0) {
     case 'handle_dialog':
     case 'zoom':
     case 'viewport':
+    case 'sessions':
+    case 'top_sites':
+    case 'topsites':
+    case 'discard':
       return runChromeTool(name, params, tabId);
     case 'screenshot': case 'capture': {
       try {

@@ -214,6 +214,7 @@ async function main() {
   const companionSet = runtime.toolsets?.find((row) => row.name === 'companion');
   ok(browserSet?.tools?.includes('browser_bookmarks') && browserSet?.tools?.includes('browser_tabs') && browserSet?.tools?.includes('browser_page_content'), 'browser toolset is expanded with companion actions');
   ok(companionSet?.tools?.includes('browser_network') && companionSet?.tools?.includes('browser_exec') && companionSet?.tools?.includes('browser_cdp'), 'companion catalog includes Hermes-aligned actions from GitHub');
+  ok(companionSet?.tools?.includes('browser_forms') && companionSet?.tools?.includes('browser_tables') && companionSet?.tools?.includes('browser_sessions'), 'companion catalog includes forms, tables, and session tools');
   ok(runtime.summary?.enabledSkills === 1 && runtime.skills?.[0]?.name === 'browser-research', 'runtime exposes Hermes skills and enabled count');
 
   // AG-UI stream.

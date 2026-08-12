@@ -209,7 +209,8 @@ function actionReadyToMirror(action) {
   const params = action.params || {};
   const needsTarget = new Set([
     'click', 'set_value', 'type_into', 'check', 'uncheck', 'clear', 'hover',
-    'focus', 'select_option', 'read', 'fill_many', 'drag', 'hold_click'
+    'focus', 'select_option', 'read', 'fill_many', 'drag', 'hold_click',
+    'dblclick', 'right_click', 'attrs', 'scroll_into_view', 'visible', 'highlight'
   ]);
   if (action.name === 'navigate') return isSafeNavUrl(params.url);
   if (action.name === 'tabs') {
@@ -330,7 +331,23 @@ const MIRRORABLE_BROWSER_TOOLS = new Set([
   'browser_network',
   'browser_clipboard',
   'browser_viewport',
-  'browser_find'
+  'browser_find',
+  'browser_dblclick',
+  'browser_right_click',
+  'browser_forms',
+  'browser_tables',
+  'browser_meta',
+  'browser_selection',
+  'browser_highlight',
+  'browser_frames',
+  'browser_storage',
+  'browser_attrs',
+  'browser_count',
+  'browser_scroll_into_view',
+  'browser_visible',
+  'browser_sessions',
+  'browser_top_sites',
+  'browser_discard'
 ]);
 
 // Public BrowserOS MCP catalog names → companion actions. Ideas only, no source.
@@ -380,7 +397,19 @@ const TOOL_ALIASES = {
   long_click: 'browser_hold_click',
   list_network_requests: 'browser_network',
   get_network_request: 'browser_network',
-  resize_page: 'browser_viewport'
+  resize_page: 'browser_viewport',
+  dblclick: 'browser_dblclick',
+  double_click: 'browser_dblclick',
+  right_click: 'browser_right_click',
+  context_click: 'browser_right_click',
+  get_forms: 'browser_forms',
+  get_tables: 'browser_tables',
+  page_meta: 'browser_meta',
+  get_selection: 'browser_selection',
+  list_iframes: 'browser_frames',
+  local_storage: 'browser_storage',
+  recently_closed: 'browser_sessions',
+  top_sites: 'browser_top_sites'
 };
 
 function canonicalToolName(name = '') {
@@ -570,6 +599,38 @@ function normalizeBrowserTool(name, args = {}) {
       return { name: 'viewport', params: args };
     case 'browser_find':
       return { name: 'find', params: { pattern: args.pattern || args.query || args.text, limit: args.limit } };
+    case 'browser_dblclick':
+      return { name: 'dblclick', params: { selector } };
+    case 'browser_right_click':
+      return { name: 'right_click', params: { selector } };
+    case 'browser_forms':
+      return { name: 'forms', params: args };
+    case 'browser_tables':
+      return { name: 'tables', params: args };
+    case 'browser_meta':
+      return { name: 'meta', params: args };
+    case 'browser_selection':
+      return { name: 'selection', params: args };
+    case 'browser_highlight':
+      return { name: 'highlight', params: { text: args.text || args.query || args.pattern } };
+    case 'browser_frames':
+      return { name: 'frames', params: args };
+    case 'browser_storage':
+      return { name: 'storage', params: args };
+    case 'browser_attrs':
+      return { name: 'attrs', params: { selector, names: args.names || args.attrs } };
+    case 'browser_count':
+      return { name: 'count', params: { selector: args.selector || args.css || selector } };
+    case 'browser_scroll_into_view':
+      return { name: 'scroll_into_view', params: { selector } };
+    case 'browser_visible':
+      return { name: 'visible', params: { selector } };
+    case 'browser_sessions':
+      return { name: 'sessions', params: args };
+    case 'browser_top_sites':
+      return { name: 'top_sites', params: args };
+    case 'browser_discard':
+      return { name: 'discard', params: args };
     case 'browser_act': {
       const actName = args.name || args.action || args.tool;
       if (!actName || !isBrowserCompanionTool(actName) || canonicalToolName(actName) === 'browser_act') return null;
@@ -798,6 +859,22 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     'browser_clipboard(action=read|write, text?)',
     'browser_viewport(action=get|set, width?, height?)',
     'browser_find(text)',
+    'browser_dblclick(@eN)',
+    'browser_right_click(@eN)',
+    'browser_forms()',
+    'browser_tables(limit?)',
+    'browser_meta()',
+    'browser_selection()',
+    'browser_highlight(text)',
+    'browser_frames()',
+    'browser_storage(action=list|get|set|remove, key?)',
+    'browser_attrs(@eN)',
+    'browser_count(selector)',
+    'browser_scroll_into_view(@eN)',
+    'browser_visible(@eN)',
+    'browser_sessions()',
+    'browser_top_sites()',
+    'browser_discard(tabId?)',
     'browser_vision()',
     'browser_tabs(action=list|create|close|switch|duplicate|pin|mute|move, tabId?, url?)',
     'browser_windows(action=list|create|close|focus|update, windowId?, url?)',
