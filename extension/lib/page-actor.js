@@ -895,7 +895,7 @@ function actionEvaluate(p = {}) {
   const expr = String(p.expression || p.script || p.js || '').trim();
   if (!expr) return { ok: false, error: 'evaluate requires expression' };
   if (isMutatingEvaluate(expr)) {
-    return { ok: false, error: 'evaluate only allows read-only expressions' };
+    return { ok: false, error: 'evaluate is read-only; use browser_click, browser_type, browser_fill, browser_press, browser_select, browser_check, or browser_run for page actions' };
   }
   try {
     const result = new Function('document', 'location', `return (${expr});`)(document, location);
