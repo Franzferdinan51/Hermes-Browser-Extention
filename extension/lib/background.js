@@ -669,15 +669,32 @@ function abortedResult(generation) {
   return { aborted: true };
 }
 
+function safeToStartNewRun() {
+  // A prior run is only "live" if it owns the current generation AND still
+  // has an active AbortController. Anything else is stale and must not block
+  // a fresh user send().
+  return Boolean(client?.abort);
+}
+
 async function chat(userText, opts = {}) {
   if (!client) client = await buildClient();
   if (opts.sendToken != null) currentSendToken = opts.sendToken;
+  if (safeToStartNewRun() && client.busy && !client.wasCanceled(client.activeGeneration)) {
+    pushDiag({ level: 'warn', source: 'chat', message: 'previous run still busy; rejecting new turn' });
+    return { aborted: true, busy: true };
+  }
   const generation = client.prepareRun();
   if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) connectBridgeWs();
   if (client.wasCanceled(generation)) return abortedResult(generation);
 
   const cfg = await store.get();
   if (client.wasCanceled(generation)) return abortedResult(generation);
+
+  // Clear stale failure memory from a prior turn so a stuck/broken chat state
+  // does not poison every follow-up question. The previous implementation kept
+  // client.cancelRequested and the abort controller alive across turns, which
+  // caused the second send() to short-circuit with "stopped".
+  if (client.cancelRequested) client.cancelRequested = false;
 
   const extra = {};
   const requestedModel = opts.model || cfg.model;

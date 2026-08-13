@@ -133,7 +133,7 @@ export class AGUIClient extends Emitter {
 
   wasCanceled(generation) {
     if (generation != null && generation !== this.activeGeneration) return true;
-    return Boolean(this.cancelRequested || this.abort?.signal?.aborted);
+    return Boolean(this.cancelRequested && this.abort);
   }
 
   /**
