@@ -16,9 +16,9 @@
  * scripting.executeScript into frames.
  */
 
-const MAX_DOM_CHARS = 60000;
-const MAX_TREE_DEPTH = 6;
-const TEXT_CAP = 280;
+const MAX_DOM_CHARS = 30000;
+const MAX_TREE_DEPTH = 5;
+const TEXT_CAP = 240;
 
 function esc(s) {
   return String(s).replace(/[<>&\n\t\r]/g, (c) => c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '&' ? '&amp;' : c === '\n' ? '⏎' : c === '\t' ? '→' : ' ');
@@ -33,8 +33,6 @@ function isVisible(el) {
   if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
   const r = el.getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return false;
-  const cs = getComputedStyle(el);
-  if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
   return true;
 }
 

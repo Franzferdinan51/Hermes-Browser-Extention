@@ -1197,7 +1197,15 @@ function groupModelBuckets(group = {}) {
   ];
 }
 
-async function modelInventory() {
+// Memoize the model inventory so panel opens and tab switches do not hammer
+// Hermes with two API calls each. Refreshes every 90s or on cache-bust.
+let modelInventoryCache = { at: 0, value: null };
+const MODEL_CACHE_MS = 90_000;
+async function modelInventory({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && modelInventoryCache.value && now - modelInventoryCache.at < MODEL_CACHE_MS) {
+    return modelInventoryCache.value;
+  }
   let providerData = null;
   try { providerData = await hermes.requestJson('/api/providers'); } catch {}
   let catalogData = {};
@@ -1261,12 +1269,14 @@ async function modelInventory() {
     return String(a.providerLabel).localeCompare(String(b.providerLabel)) || String(a.label).localeCompare(String(b.label));
   });
 
-  return {
+  const result = {
     object: 'list',
     active_provider: catalogData?.active_provider || providerData?.active_provider,
     default_model: catalogData?.default_model || providerData?.default_model,
     data: out
   };
+  modelInventoryCache = { at: Date.now(), value: result };
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1295,7 +1305,8 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && route === '/v1/models') {
     try {
-      json(res, 200, await modelInventory());
+      const force = /(^|[?&])refresh=1\b/.test(String(req.url || ''));
+      json(res, 200, await modelInventory({ force }));
     } catch (e) {
       json(res, 200, { object: 'list', error: e.message, data: [] });
     }
