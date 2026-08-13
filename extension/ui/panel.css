@@ -82,6 +82,10 @@ button.mini { padding: 3px 9px; font-size: 11px; }
 .msg.tool.err { border-left-color: var(--red); }
 .msg.tool.err .tool-status, .msg.tool.err .toolresult { color: var(--red); }
 .msg.err { align-self: flex-start; background: rgba(255,92,114,.12); border: 1px solid rgba(255,92,114,.4); color: var(--red); }
+.msg.notice { align-self: stretch; display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--amber) 12%, transparent); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); }
+.msg.notice .notice-title { font-weight: 700; color: var(--amber); }
+.msg.notice .notice-detail { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.msg.notice .notice-action { align-self: flex-start; padding: 5px 10px; font-size: 11px; }
 .msg.state { align-self: stretch; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px dashed var(--border); }
 
 .composer { border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 94%, transparent); padding: 8px 10px 7px; box-shadow: 0 -10px 30px rgba(0,0,0,.08); }

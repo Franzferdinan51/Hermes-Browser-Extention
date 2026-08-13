@@ -1,6 +1,6 @@
 // panel.js — Hermes side panel client. Renders AG-UI responses, runtime state,
 // browser tool calls/results, page context, Hermes toolsets/skills, and models.
-import { readThreadId, buildChatRequest, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, visibleError, connectionState } from '../lib/thread.js';
+import { readThreadId, buildChatRequest, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, visibleError, staleRuntimeNotice, connectionState } from '../lib/thread.js';
 import { abortSucceeded, shouldIdleComposer } from '../lib/agui-client.js';
 
 const $ = (id) => document.getElementById(id);
@@ -346,12 +346,37 @@ function flushText() {
 }
 
 let lastRenderedError = '';
+function addNotice(notice) {
+  emptyEl.style.display = 'none';
+  const wrap = document.createElement('div');
+  wrap.className = 'msg notice';
+  const title = document.createElement('div');
+  title.className = 'notice-title';
+  title.textContent = notice.title;
+  const detail = document.createElement('div');
+  detail.className = 'notice-detail';
+  detail.textContent = notice.detail;
+  const btn = document.createElement('button');
+  btn.className = 'notice-action';
+  btn.type = 'button';
+  btn.textContent = notice.action || 'Reload panel';
+  btn.addEventListener('click', () => location.reload());
+  wrap.append(title, detail, btn);
+  chatEl.appendChild(wrap);
+  scrollChat();
+  return wrap;
+}
+
 function showError(value) {
   const raw = value instanceof Error ? value.message : String(value || 'unknown');
   const normalized = raw.replace(/^Error:\s*/i, '');
   if (normalized === lastRenderedError) return;
   lastRenderedError = normalized;
-  addEl('err', 'Error: ' + visibleError(normalized));
+  // Bridge already retries transient 409 agent_runtime_stale; if the text still
+  // reaches here the bridge gave up, so show guidance instead of the raw JSON.
+  const notice = staleRuntimeNotice(normalized);
+  if (notice) addNotice(notice);
+  else addEl('err', 'Error: ' + visibleError(normalized));
   setTimeout(() => { if (lastRenderedError === normalized) lastRenderedError = ''; }, 1500);
 }
 

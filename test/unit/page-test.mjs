@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, livePageState, visibleError, connectionState } from '../../extension/lib/thread.js';
+import { readThreadId, buildChatRequest, threadForTab, bindTabThread, appendTranscript, isolateTabConversation, pageIdentity, pageIdentityFallback, shouldApplyPageIdentity, livePageState, visibleError, staleRuntimeNotice, connectionState } from '../../extension/lib/thread.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.join(__dirname, '..', '..', 'extension');
@@ -291,6 +291,12 @@ async function drive() {
   ok(hydrated.tabId === 2 && String(hydrated.url).startsWith('chrome:'), 'live page prefers the followed tab over a snapshot from another tab');
   ok(pageIdentity({ ok: true, page: hydrated }).restricted, 'get-state envelope ok:true still shows restricted guidance for chrome://');
   ok(visibleError('') !== 'unknown' && visibleError('unknown').includes('bridge'), 'chat errors stay actionable instead of unknown');
+  const staleRaw = 'Hermes chat/start: HTTP 409 {"error":"Hermes Agent was updated while Hermes WebUI was running. Restart Hermes WebUI before retrying this action.","type":"agent_runtime_stale","retryable":true}';
+  const staleNotice = staleRuntimeNotice(staleRaw);
+  ok(staleNotice && /restart/i.test(staleNotice.title + staleNotice.detail) && !staleNotice.detail.includes('{'), 'persistent 409 stale becomes a friendly notice without raw JSON');
+  ok(staleNotice.action === 'Reload panel', 'stale notice offers a reload-panel action');
+  ok(staleRuntimeNotice('Hermes chat/start: HTTP 409 {"error":"session already has an active stream"}') === null, 'plain 409 stream conflict is not mislabeled as stale');
+  ok(staleRuntimeNotice('Hermes chat/stream: HTTP 500') === null && staleRuntimeNotice('') === null, 'non-stale errors fall through to visibleError');
   ok(connectionState({ clientBusy: true }).kind === 'busy' && connectionState({ bridgeConnected: true }).kind === 'ok' && connectionState({}).kind === 'err', 'connection state covers busy, connected, and unavailable');
 }
 await drive().catch((e) => { console.error('drive error', e.message); failed++; });

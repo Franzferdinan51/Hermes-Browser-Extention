@@ -153,6 +153,25 @@ export function visibleError(error) {
   return raw;
 }
 
+/**
+ * The bridge auto-recovers transient 409 agent_runtime_stale (cancel + resetSession
+ * + retry, see bridge/hermes.mjs). Only a PERSISTENT stale reaches the UI, and it
+ * arrives as the raw body: `Hermes chat/start: HTTP 409 {"error":"...","type":"agent_runtime_stale"}`.
+ * Returns a friendly notice for that shape, or null so callers fall back to visibleError().
+ */
+export function staleRuntimeNotice(error) {
+  const raw = String(error?.message || error || '').replace(/^Error:\s*/i, '').trim();
+  if (!raw) return null;
+  if (!/\b409\b/.test(raw)) return null;
+  if (!/agent_runtime_stale|was updated while/i.test(raw)) return null;
+  return {
+    kind: 'agent_runtime_stale',
+    title: 'Hermes WebUI needs a restart',
+    detail: 'Hermes Agent was updated while its WebUI was still running, so this session is stale. Restart the Hermes WebUI (or the bridge), then reload this panel and send again.',
+    action: 'Reload panel'
+  };
+}
+
 export function connectionState(source = {}) {
   if (source.clientBusy) return { kind: 'busy', label: 'working' };
   if (source.bridgeConnected) return { kind: 'ok', label: 'connected' };
