@@ -42,7 +42,9 @@ ok(leftoverAbortedResult(genA, stopped.activeGeneration).announce === false, 'le
 ok(abortActiveRun(stopped).generation === genB, 'next abort-run targets B, not leftover A');
 ok(shouldIdleComposer(genA, genB) === false, 'stale send token A cannot hide live Stop');
 ok(client.abortRun() === true, 'abortRun records a cancel even before prepareRun');
-ok(client.wasCanceled() === true, 'wasCanceled is true after abortRun');
+// After commit 3e351bc, wasCanceled() intentionally requires both a cancel flag AND a live
+// AbortController, so a bare abortRun() does NOT make wasCanceled return true. That change
+// is what prevents stale cancel state from blocking cross-turn follow-up questions.
 
 const preflight = new AGUIClient({ url: 'http://127.0.0.1:9/agent' });
 preflight.prepareRun();
@@ -99,6 +101,18 @@ try {
 }
 ok(staleThrew, 'leftover run A cannot fetch after B starts');
 ok(race.activeGeneration === raceB && race.abort && race.abort.signal.aborted === false, 'stale run A does not clear or abort B');
+
+const crossTurn = new AGUIClient({ url: `http://127.0.0.1:1/unused` });
+crossTurn.abortRun();
+// Since 3e351bc, wasCanceled() intentionally requires both a cancel flag AND a live
+// AbortController. A bare abortRun() without prepareRun() therefore does NOT mark the
+// client as canceled — and that's the whole point: stale cancel state from a previous
+// turn cannot poison a follow-up question.
+ok(crossTurn.wasCanceled() === false, 'abortRun without prepareRun does not mark wasCanceled true (no live controller)');
+const crossGen = crossTurn.prepareRun();
+ok(crossGen >= 1 && crossTurn.activeGeneration === crossGen, 'prepareRun installs a fresh generation');
+ok(crossTurn.cancelRequested === false, 'prepareRun clears stale cancelRequested');
+ok(crossTurn.wasCanceled(crossGen) === false, 'wasCanceled is false for the new generation after cross-turn reset');
 
 const runB = race.runAgent({ messages: [{ role: 'user', content: 'B hang' }] }, { generation: raceB });
 await new Promise((resolve) => setTimeout(resolve, 80));
