@@ -712,7 +712,7 @@ function providerName(m) {
 
 function renderModels() {
   const select = $('modelSelect');
-  const filter = $('modelFilter')?.value.trim().toLowerCase() || '';
+  const filter = String(select?.dataset?.filter || '').trim().toLowerCase();
   const matches = (m) => !filter || `${m.id} ${m.label} ${m.provider} ${m.providerLabel}`.toLowerCase().includes(filter);
   const selected = allModels.find((m) => m.id === selectedModelId && (!selectedProvider || m.provider === selectedProvider))
     || allModels.find((m) => m.id === selectedModelId);
@@ -752,6 +752,14 @@ function renderModels() {
       optgroup.appendChild(option);
     }
     select.appendChild(optgroup);
+  }
+
+  const currentFilter = String(select.dataset?.filter || '').trim();
+  if (currentFilter && select.options.length) {
+    const search = document.createElement('option');
+    search.disabled = true;
+    search.textContent = `Search "${currentFilter}"`;
+    select.appendChild(search);
   }
 
   if (!select.value && select.options[0]) select.selectedIndex = 0;
@@ -855,8 +863,21 @@ $('autoSnap').addEventListener('change', async () => {
   config = { ...(config || {}), attachPageContext };
   await chrome.runtime.sendMessage({ kind: 'set-config', patch: { attachPageContext } }).catch(() => null);
 });
-if ($('modelFilter')) $('modelFilter').addEventListener('input', renderModels);
 $('refreshModels').addEventListener('click', () => loadModels(selectedModelId || config?.model, selectedProvider || config?.modelProvider));
+
+if ($('modelSelect')) {
+  $('modelSelect').addEventListener('input', () => {
+    const text = String($('modelSelect').selectedOptions?.[0]?.textContent || '').trim();
+    const match = text.match(/Search "(.+)"|Search \"(.+)\"/);
+    const next = match ? (match[1] || match[2]) : '';
+    if (next) {
+      $('modelSelect').dataset.filter = next;
+      renderModels();
+    } else {
+      delete $('modelSelect').dataset.filter;
+    }
+  });
+}
 
 (async () => {
   const r = await chrome.runtime.sendMessage({ kind: 'get-config' }).catch(() => null);
