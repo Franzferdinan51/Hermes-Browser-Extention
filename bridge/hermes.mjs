@@ -228,8 +228,15 @@ export class HermesClient extends EventEmitter {
       startError = start.ok ? { text: '', data: null } : await readStartError(start);
     }
     if (start.status === 409) {
+      // Two distinct 409 shapes exist today:
+      //   - "session already has an active stream"   → cancel that stream, retry once
+      //   - "Hermes Agent was updated while WebUI was running" (agent_runtime_stale, retryable)
+      //     → cancel any stuck stream + drop the session so _ensureSession
+      //       recreates it with the freshly-updated Hermes runtime
+      const stale = /agent_runtime_stale|was updated while/i.test(startError.text);
       const stuckId = startError.data?.active_stream_id || this._streamId || '';
-      await this.cancelStream(stuckId);
+      if (stuckId) await this.cancelStream(stuckId);
+      if (stale) this.resetSession();
       start = await startChat();
       startError = start.ok ? { text: '', data: null } : await readStartError(start);
     }

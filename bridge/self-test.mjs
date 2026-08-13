@@ -52,6 +52,16 @@ const fake = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'session already has an active stream', active_stream_id: 'stuck_stream' }));
       return;
     }
+    if (prompt.includes('RUNTIME_STALE_PROBE') && !conflictOnce.has('stale')) {
+      conflictOnce.add('stale');
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Hermes Agent was updated while Hermes WebUI was running. Restart Hermes WebUI before retrying this action.',
+        type: 'agent_runtime_stale',
+        retryable: true
+      }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ stream_id: 'fake_stream' }));
     return;
@@ -570,6 +580,22 @@ async function main() {
     console.log('\n--- bridge log ---\n' + bridgeLog.slice(-3000));
     process.exit(1);
   }
+
+  // Regression: 409 agent_runtime_stale must self-heal (cancel + resetSession + retry).
+  fake.listen(FAKE_PORT, '127.0.0.1');
+  const staleProbe = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      agentId: 'hermes',
+      threadId: 'thread_stale',
+      runId: 'run_stale',
+      messages: [{ role: 'user', content: 'RUNTIME_STALE_PROBE' }]
+    })
+  });
+  const staleBody = await staleProbe.text();
+  ok(!staleBody.includes('agent_runtime_stale'), '409 agent_runtime_stale self-heals (cancel + resetSession + retry)');
+  fake.close();
   process.exit(0);
 }
 
