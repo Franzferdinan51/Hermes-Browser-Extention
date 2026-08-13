@@ -30,11 +30,21 @@ export class HermesClient extends EventEmitter {
 
   async _login(force = false) {
     if (!force && this._cookie && this._cookieExpiry > Date.now() + 60_000) return this._cookie;
-    const r = await fetch(`${this.baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: this.password })
-    });
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let r;
+    try {
+      r = await fetch(`${this.baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: this.password }),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      throw new Error(`Hermes login failed: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!r.ok) throw new Error(`Hermes login: HTTP ${r.status}`);
     const cookies = typeof r.headers.getSetCookie === 'function'
       ? r.headers.getSetCookie()
@@ -152,9 +162,7 @@ export class HermesClient extends EventEmitter {
         // Attached companion chats already have the live Chrome tab. Enabling
         // Hermes' native browser / browser-use toolsets here launches a second
         // browser (or fails those tools) while the companion is already acting.
-        enabled_toolsets: attached
-          ? ['hermes-cli', 'skills', 'memory', 'todo']
-          : undefined
+        enabled_toolsets: ['hermes-cli', 'browser', 'skills', 'memory', 'todo']
       })
     });
     if (!r.ok) {
@@ -183,9 +191,6 @@ export class HermesClient extends EventEmitter {
       sessionId = await this._ensureSession({ attached: Boolean(extra.attached) });
     }
     this._sessionId = sessionId;
-    if (extra.attached && sessionId) {
-      await this.setSessionToolsets(sessionId, ['hermes-cli', 'skills', 'memory', 'todo']);
-    }
 
     let modelProvider = extra.modelProvider || this.modelProvider;
     let model = extra.model || this.model;
@@ -204,7 +209,7 @@ export class HermesClient extends EventEmitter {
 
     const startChat = async () => fetch(`${this.baseUrl}/api/chat/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: await this._login() },
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
       body: JSON.stringify(body)
     });
 
