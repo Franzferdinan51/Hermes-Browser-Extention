@@ -58,7 +58,10 @@ const fake = http.createServer(async (req, res) => {
       res.end(JSON.stringify({
         error: 'Hermes Agent was updated while Hermes WebUI was running. Restart Hermes WebUI before retrying this action.',
         type: 'agent_runtime_stale',
-        retryable: true
+        retryable: true,
+        // Mirror the production stream-conflict 409: cancelStream reads this
+        // off startError.data before falling back to this._streamId.
+        active_stream_id: 'stale_stream'
       }));
       return;
     }
@@ -572,17 +575,17 @@ async function main() {
   })).text();
   ok(lastChatStartPayload?.model === 'hidden-id' && lastChatStartPayload?.model_provider === 'nous', 'qualified @provider:model ids are sent as the model plus its provider');
 
-  console.log(`\n[${passed} passed, ${failed} failed]`);
-  companion.close();
-  child.kill();
-  fake.close();
-  if (failed) {
-    console.log('\n--- bridge log ---\n' + bridgeLog.slice(-3000));
-    process.exit(1);
-  }
-
   // Regression: 409 agent_runtime_stale must self-heal (cancel + resetSession + retry).
-  fake.listen(FAKE_PORT, '127.0.0.1');
+  // Must run BEFORE teardown so the fake server actually serves the 409 + the
+  // retry. Previously this block ran after fake.close()/child.kill(), so the
+  // fetch ECONNRESET'd, returned empty body, and `!includes('agent_runtime_stale')`
+  // passed trivially — the test was a vacuous green that did not exercise the
+  // 97e1855 self-heal at all. Now we assert observable side effects: cancelStream
+  // was called with the stale stream id, retry re-issued chat/start with the
+  // same prompt, and the SSE body returned to the client does not leak the
+  // stale-run error string.
+  const preStaleCancels = cancelledStreamIds.slice();
+  const preStaleLast = lastChatStartPayload;
   const staleProbe = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/agent`, {
     method: 'POST',
     headers: { ...authHeaders, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -594,8 +597,21 @@ async function main() {
     })
   });
   const staleBody = await staleProbe.text();
-  ok(!staleBody.includes('agent_runtime_stale'), '409 agent_runtime_stale self-heals (cancel + resetSession + retry)');
+  const selfHealFired = cancelledStreamIds.some((id) => !preStaleCancels.includes(id));
+  const retriedStart = lastChatStartPayload && lastChatStartPayload !== preStaleLast
+    && String(lastChatStartPayload?.message || '').includes('RUNTIME_STALE_PROBE');
+  ok(selfHealFired, '409 agent_runtime_stale cancels the stale stream before retrying chat/start');
+  ok(retriedStart, '409 agent_runtime_stale retries chat/start with the same prompt');
+  ok(!staleBody.includes('agent_runtime_stale'), '409 agent_runtime_stale does not leak the stale-run error to the client');
+
+  console.log(`\n[${passed} passed, ${failed} failed]`);
+  companion.close();
+  child.kill();
   fake.close();
+  if (failed) {
+    console.log('\n--- bridge log ---\n' + bridgeLog.slice(-3000));
+    process.exit(1);
+  }
   process.exit(0);
 }
 
