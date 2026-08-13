@@ -317,6 +317,10 @@ function connectBridgeWs() {
   });
 }
 connectBridgeWs();
+// MV3 workers terminate when idle; reconnect when Chrome restarts or the
+// extension is (re)installed so wsClients is not stuck at 0.
+if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(connectBridgeWs);
+if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(connectBridgeWs);
 
 async function getActiveTab() {
   return getPageTab();
