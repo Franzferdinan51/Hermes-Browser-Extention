@@ -16,3 +16,6 @@ test/node_modules/
 
 # runtime logs
 *.log
+
+# hermes runtime cache (created by this repo when run locally)
+.hermes/
