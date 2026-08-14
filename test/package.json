@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Unit tests for the Hermes browser extension page reader/actor logic (using a DOM fixture).",
+  "description": "Unit tests for the Hermes browser extension page reader/actor logic and Chrome-native tool runtime.",
   "scripts": {
-    "test": "node unit/page-test.mjs && node unit/abort-test.mjs"
+    "test": "node unit/page-test.mjs && node unit/abort-test.mjs && node unit/browser-chrome-test.mjs"
   },
   "dependencies": {
     "jsdom": "^24.0.0"

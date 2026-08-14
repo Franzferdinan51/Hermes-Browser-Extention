@@ -66,8 +66,9 @@ function verb(params, fallback = 'list') {
 
 function targetTabId(params, fallbackId) {
   const id = params.tabId ?? params.id ?? params.pageId ?? fallbackId;
+  if (id == null || id === '') return null;
   const n = Number(id);
-  return Number.isInteger(n) ? n : fallbackId;
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 async function runInMainWorld(tabId, func, args = []) {
@@ -149,10 +150,15 @@ async function handleTabs(params, tabId) {
         : tabs;
       return { ok: true, value: filtered.slice(0, 200).map(tabSummary), count: filtered.length };
     }
-    case 'get':
+    case 'get': {
+      if (id == null) return { ok: false, error: 'tabs get requires tabId' };
+      const tab = await chrome.tabs.get(id);
+      return { ok: true, value: tabSummary(tab) };
+    }
     case 'get_active':
     case 'active': {
-      const tab = await chrome.tabs.get(id);
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return { ok: false, error: 'No active tab found' };
       return { ok: true, value: tabSummary(tab) };
     }
     case 'create':
@@ -365,10 +371,15 @@ async function handleBookmarks(params) {
       return { ok: true, value: created };
     }
     case 'update': {
-      const updated = await chrome.bookmarks.update(String(params.id), {
-        title: params.title,
-        url: params.url ? httpUrl(params.url) || params.url : undefined
-      });
+      const patch = {};
+      if (params.title != null) patch.title = String(params.title);
+      if (params.url != null) {
+        const url = httpUrl(params.url);
+        if (!url) return { ok: false, error: 'bookmark url must be http(s)' };
+        patch.url = url;
+      }
+      if (!Object.keys(patch).length) return { ok: false, error: 'update bookmark requires title or url' };
+      const updated = await chrome.bookmarks.update(String(params.id), patch);
       return { ok: true, value: updated };
     }
     case 'remove':
@@ -480,7 +491,11 @@ async function handleDownloads(params) {
 async function handleCookies(params, tabId) {
   const action = verb(params, 'list');
   const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
-  const url = httpUrl(params.url, tab?.url) || tab?.url || '';
+  const explicitUrl = params.url != null ? httpUrl(params.url, tab?.url) : null;
+  if (params.url != null && !explicitUrl) {
+    return { ok: false, error: 'cookies url must be a valid http(s) URL' };
+  }
+  const url = explicitUrl || httpUrl(tab?.url) || '';
   if (!chrome.cookies) {
     return { ok: false, error: 'cookies permission is not granted' };
   }
