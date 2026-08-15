@@ -7,6 +7,17 @@
   if (globalThis.__HERMES_CONTENT_LOADED__) return;
   globalThis.__HERMES_CONTENT_LOADED__ = true;
 
+  // Guard: skip internal/blank pages that the manifest injects into but that
+  // have no useful page DOM for the extension to interact with.  The service
+  // worker already uses chrome.tabs.query with url:-filters for explicit chrome://
+  // pages; this second guard catches edge cases such as about:blank (which the
+  // manifest keeps enabled for side-panel bookmarklet scenarios) and
+  // chrome-extension:// pages loaded by OTHER extensions — our own extension
+  // pages are already excluded by the fact content scripts only run in content
+  // frames, not in the panel UI itself.
+  const RE_INTERNAL = /^(about|chrome|chrome-extension|edge|brave|opera):/i;
+  if (RE_INTERNAL.test(location.href)) return;
+
   function reader() { return globalThis.HermesPageReader || null; }
   function actor() { return globalThis.HermesPageActor || null; }
 

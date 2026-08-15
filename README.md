@@ -112,14 +112,15 @@ The extension does **not** replace Hermes's own tool runtime. Hermes remains the
 ### 1. Start Hermes and the bridge
 
 ```bash
-cd bridge
+git clone https://github.com/Franzferdinan51/Hermes-Browser-Extention.git
+cd Hermes-Browser-Extention/bridge
 npm install
 npm start
 ```
 
 The bridge listens on `http://127.0.0.1:8965` and auto-loads Hermes's WebUI password from `~/.hermes/.hermes-webui.env` when available.
 
-Optional hardening:
+Optional hardening — set a local bridge token:
 
 ```bash
 BRIDGE_AUTH_TOKEN="use-a-long-random-local-token" npm start
@@ -129,19 +130,18 @@ If you set `BRIDGE_AUTH_TOKEN`, paste the same value into the extension's **Brid
 
 ### 2. Load the extension
 
-1. Open `chrome://extensions`.
+1. Open `chrome://extensions` (or `brave://extensions` on Brave, `edge://extensions` on Edge).
 2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select the `extension/` directory.
-5. Pin the Hermes icon if desired.
+3. Choose **Load unpacked**, then select the `extension/` subdirectory of this repo.
+4. Pin the Hermes icon to the toolbar if desired.
 
 ### 3. Open the side panel
 
-Click the Hermes extension icon. The panel will:
+Click the Hermes extension icon in the browser toolbar. The panel will:
 
 - discover configured Hermes models,
 - load the real Hermes toolset/skill inventory,
-- attach a fresh page snapshot when **attach this tab** is enabled,
+- attach a fresh page snapshot when **Attach this tab** is enabled,
 - keep later browser actions on that pinned tab (search/new-page calls stay there),
 - stream Hermes text/tool activity,
 - show connection/runtime state,

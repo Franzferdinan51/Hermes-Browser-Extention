@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Unit tests for the Hermes browser extension page reader/actor logic and Chrome-native tool runtime.",
   "scripts": {
-    "test": "node unit/page-test.mjs && node unit/abort-test.mjs && node unit/browser-chrome-test.mjs"
+    "test": "node unit/page-test.mjs && node unit/abort-test.mjs && node unit/browser-chrome-test.mjs && node unit/content-guard-test.mjs"
   },
   "dependencies": {
     "jsdom": "^24.0.0"

@@ -25,9 +25,23 @@ import { HermesClient, readSSE } from './hermes.mjs';
 function loadEnvFile(file) {
   try {
     if (!fs.existsSync(file)) return;
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-      if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    // Normalise CRLF → LF so line-boundary logic is unambiguous.
+    const text = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+    for (const rawLine of text.split('\n')) {
+      // Strip inline # comments (but not # inside quoted values).
+      const hashIdx = rawLine.indexOf('#');
+      const line = hashIdx >= 0 ? rawLine.slice(0, hashIdx) : rawLine;
+      if (!line.trim()) continue; // empty or whitespace-only
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!m) continue;
+      const key = m[1];
+      let val = m[2];
+      // Strip matching leading/trailing quotes; do NOT interpret escape sequences.
+      val = val.replace(/^(['"])(.*)\1$/, '$2').replace(/^['"]|['"]$/g, '');
+      // Reject values containing newlines, carriage returns, or null bytes
+      // (prevents continuation-line attacks and embedded binary paths).
+      if (/[\x00\r\n]/.test(val)) continue;
+      if (process.env[key] === undefined) process.env[key] = val;
     }
   } catch (e) {
     console.warn('[hermes-bridge] could not load ' + file + ': ' + e.message);
@@ -98,7 +112,8 @@ async function readRequestBody(req, limit = MAX_BODY_BYTES) {
 function isAllowedOrigin(origin = '') {
   if (!origin) return true; // curl/node/native clients do not send Origin.
   return /^chrome-extension:\/\/[a-p]{32}$/i.test(origin)
-    || /^moz-extension:\/\/[a-z0-9-]+$/i.test(origin);
+    // Firefox assigns a random UUID v4 to each extension installation.
+    || /^moz-extension:\/\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(origin);
 }
 
 function tokenFromRequest(req) {
