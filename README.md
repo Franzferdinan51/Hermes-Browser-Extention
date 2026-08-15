@@ -243,7 +243,7 @@ Bridge test:
 cd bridge
 npm ci
 npm test
-# expected contract: 40 passed, 0 failed
+# expected contract: 77 passed, 0 failed
 ```
 
 The fake-Hermes test covers bridge auth, hostile-origin rejection, model discovery, toolset/skill discovery, AG-UI events, raw-reasoning suppression, browser-vs-web tool routing, prompt/user-turn preservation, and the current Hermes browser-tool contract.
@@ -254,7 +254,10 @@ Page reader/actor test:
 cd test
 npm ci
 npm test
-# expected contract: 46 passed, 0 failed
+# expected contract: 72 passed, 0 failed (page-test)
+# expected contract: 39 passed, 0 failed (abort-test)
+# expected contract:  3 passed, 0 failed (browser-chrome-test)
+# expected contract: 18 passed, 0 failed (content-guard-test)
 ```
 
 GitHub Actions runs both suites plus `node --check` over the extension modules. The workflow also supports a manual run from the Actions tab.
