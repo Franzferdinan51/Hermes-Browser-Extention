@@ -2,7 +2,7 @@
  * hermes.mjs — client for the Hermes WebUI REST API used by the bridge.
  *
  * Chat pattern:
- *   1. POST /api/auth/login {password} -> Set-Cookie: hermes_session=<v>
+ *   1. POST /auth/password-login {provider, username, password} -> Set-Cookie: hermes_session=<v>
  *   2. POST /api/session/new -> {session: {session_id}}
  *   3. POST /api/chat/start  -> {stream_id}
  *   4. GET  /api/chat/stream?stream_id=<id> -> SSE (typed `event:` frames)
@@ -34,10 +34,15 @@ export class HermesClient extends EventEmitter {
     const timeout = setTimeout(() => ctrl.abort(), 5000);
     let r;
     try {
-      r = await fetch(`${this.baseUrl}/api/auth/login`, {
+      // Use /auth/password-login with provider, username, and password
+      r = await fetch(`${this.baseUrl}/auth/password-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: this.password }),
+        body: JSON.stringify({ 
+          provider: 'basic',
+          username: 'hermes',
+          password: this.password 
+        }),
         signal: ctrl.signal
       });
     } catch (e) {
