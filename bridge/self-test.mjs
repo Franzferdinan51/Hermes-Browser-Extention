@@ -284,7 +284,7 @@ async function main() {
     hz = { error: e.message };
   }
   ok(hz.ok === true && hz.hermesOk === true, 'healthz reports Hermes reachable');
-  ok(hz.version === '0.3.2' && hz.authRequired === true, 'healthz exposes secured bridge version');
+  ok(hz.version === '0.3.6' && hz.authRequired === true, 'healthz exposes secured bridge version');
 
   // Model discovery.
   let models = {};
