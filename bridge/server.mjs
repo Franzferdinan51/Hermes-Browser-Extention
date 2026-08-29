@@ -25,16 +25,21 @@ import { HermesClient, readSSE } from './hermes.mjs';
 function loadEnvFile(file) {
   try {
     if (!fs.existsSync(file)) return;
+    // Normalise CRLF → LF so line-boundary logic is unambiguous.
     const text = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
     for (const rawLine of text.split('\n')) {
+      // Strip inline # comments (but not # inside quoted values).
       const hashIdx = rawLine.indexOf('#');
       const line = hashIdx >= 0 ? rawLine.slice(0, hashIdx) : rawLine;
-      if (!line.trim()) continue;
+      if (!line.trim()) continue; // empty or whitespace-only
       const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (!m) continue;
       const key = m[1];
       let val = m[2];
+      // Strip matching leading/trailing quotes; do NOT interpret escape sequences.
       val = val.replace(/^(['"])(.*)\1$/, '$2').replace(/^['"]|['"]$/g, '');
+      // Reject values containing newlines, carriage returns, or null bytes
+      // (prevents continuation-line attacks and embedded binary paths).
       if (/[\x00\r\n]/.test(val)) continue;
       if (process.env[key] === undefined) process.env[key] = val;
     }
@@ -45,13 +50,21 @@ function loadEnvFile(file) {
 
 const HERMES_HOME = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
 loadEnvFile(path.join(HERMES_HOME, '.hermes-webui.env'));
+// Also pick up API_SERVER_KEY from the main Hermes .env so the bridge can
+// authenticate against the Hermes API server (port 8642 by default).
 loadEnvFile(path.join(HERMES_HOME, '.env'));
 
 const PORT = Number(process.env.PORT || 8965);
 const cfg = {
+  // Bridge talks to the Hermes API server, not the WebUI dashboard. The API
+  // server is started by `hermes gateway` with API_SERVER_ENABLED=true and
+  // listens on API_SERVER_PORT (default 8642). The old HERMES_WEBUI_PORT
+  // (dashboard on 8787) is kept as a fallback for backwards compatibility.
   hermesUrl: process.env.HERMES_URL || process.env.HERMES_API_URL
     || `http://127.0.0.1:${process.env.API_SERVER_PORT || 8642}`,
   apiKey: process.env.HERMES_API_KEY || process.env.API_SERVER_KEY || '',
+  // Legacy fields — accepted but unused now that the API server uses Bearer
+  // auth instead of the dashboard's session-token / basic-auth scheme.
   password: process.env.HERMES_PASSWORD || process.env.HERMES_WEBUI_PASSWORD || '',
   model: process.env.MODEL || 'ornith-1.5-35b-a3b',
   modelProvider: process.env.MODEL_PROVIDER || 'lmstudio',
@@ -68,20 +81,32 @@ const hermes = new HermesClient({
   workspace: cfg.workspace
 });
 
+// Cached provider credentials for model catalog discovery
 let _credentialsCache = { at: 0, value: null };
-const CREDS_CACHE_MS = 300_000;
+const CREDS_CACHE_MS = 300_000; // 5 min
 
 async function getProviderCredentials() {
   const now = Date.now();
   if (_credentialsCache.value && now - _credentialsCache.at < CREDS_CACHE_MS) {
     return _credentialsCache.value;
   }
+  // The API server (port 8642) does not expose /api/credentials/pool — that's
+  // a dashboard-only endpoint. Build a minimal credential map directly from
+  // environment variables instead so the model catalog stays discoverable.
   const creds = {};
+
+  // LM Studio — hardcoded default URL; the API key is whatever LM Studio is
+  // configured to require (often "lm-studio" or empty). Users running it on
+  // a non-default host override via LM_BASE_URL.
   const lmBase = process.env.LM_BASE_URL || 'http://127.0.0.1:1234';
   creds.lmstudio = {
     baseUrl: lmBase.replace(/\/+$/, ''),
     apiKey: process.env.LM_API_KEY || 'lm-studio'
   };
+
+  // MiniMax — pull from .env or process env. Bridge .hermes-webui.env
+  // already loads ~/.hermes/.hermes-webui.env via loadEnvFile, but the main
+  // Hermes .env sets MINIMAX_API_KEY and we read it again here for safety.
   const minimaxKey = process.env.MINIMAX_API_KEY || process.env.HERMES_MINIMAX_API_KEY || '';
   if (minimaxKey) {
     creds.minimax = {
@@ -89,6 +114,7 @@ async function getProviderCredentials() {
       apiKey: minimaxKey
     };
   }
+
   _credentialsCache = { at: now, value: creds };
   return creds;
 }
@@ -144,9 +170,13 @@ async function readRequestBody(req, limit = MAX_BODY_BYTES) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// ---------------------------------------------------------------------------
+// Request security
+// ---------------------------------------------------------------------------
 function isAllowedOrigin(origin = '') {
-  if (!origin) return true;
+  if (!origin) return true; // curl/node/native clients do not send Origin.
   return /^chrome-extension:\/\/[a-p]{32}$/i.test(origin)
+    // Firefox assigns a random UUID v4 to each extension installation.
     || /^moz-extension:\/\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(origin);
 }
 
@@ -187,6 +217,9 @@ function json(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket channel to the extension
+// ---------------------------------------------------------------------------
 const wsClients = new Set();
 const pendingToolResults = new Map();
 const mirrorStreams = new Map();
@@ -451,7 +484,7 @@ function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools, inp
   if (mirroredTools.has(toolCallId)) return;
   let args;
   try { args = typeof tool.args === 'string' ? JSON.parse(tool.args || '{}') : (tool.args || {}); }
-  catch { return; }
+  catch { return; } // streamed JSON is not complete yet
   const pin = attachPin(input, threadId);
   const rewritten = rewriteOffTabTool(tool.name, args, pin, input);
   let action = rewritten;
@@ -479,6 +512,9 @@ function mirrorBrowserAction(threadId, toolCallId, tool, res, mirroredTools, inp
   })));
 }
 
+// ---------------------------------------------------------------------------
+// AG-UI event helpers
+// ---------------------------------------------------------------------------
 function sse(frame) { return `data: ${JSON.stringify(frame)}\n\n`; }
 function runStarted(threadId, runId) { return { type: 'RUN_STARTED', threadId, runId, timestamp: Date.now() }; }
 function runFinished(threadId, runId) { return { type: 'RUN_FINISHED', threadId, runId, timestamp: Date.now() }; }
@@ -494,54 +530,145 @@ function stateSnapshot(state) { return { type: 'STATE_SNAPSHOT', state, timestam
 function custom(kind, data = {}) { return { type: 'CUSTOM', kind, ...data, timestamp: Date.now() }; }
 function uid(prefix) { return prefix + Math.random().toString(36).slice(2); }
 
+// ---------------------------------------------------------------------------
+// Hermes browser-tool bridge
+// ---------------------------------------------------------------------------
 const MIRRORABLE_BROWSER_TOOLS = new Set([
-  'browser_navigate','browser_snapshot','browser_click','browser_type','browser_scroll',
-  'browser_back','browser_press','browser_get_images','browser_check','browser_uncheck',
-  'browser_clear','browser_hover','browser_focus','browser_select','browser_wait',
-  'browser_read','browser_grep','browser_diff','browser_evaluate','browser_click_at',
-  'browser_type_at','browser_hover_at','browser_drag','browser_fill','browser_forward',
-  'browser_reload','browser_tabs','browser_windows','browser_tab_groups','browser_history',
-  'browser_downloads','browser_screenshot','browser_pdf','browser_upload','browser_run',
-  'browser_bookmarks','browser_cookies','browser_console','browser_dialog','browser_page_content',
-  'browser_links','browser_dom','browser_search_dom','browser_zoom','browser_new_page',
-  'browser_close_page','browser_switch_tab','browser_active_tab','browser_move_page',
-  'browser_exec','browser_cdp','browser_hold_click','browser_network','browser_clipboard',
-  'browser_viewport','browser_find','browser_dblclick','browser_right_click','browser_forms',
-  'browser_tables','browser_meta','browser_selection','browser_highlight','browser_frames',
-  'browser_storage','browser_attrs','browser_count','browser_scroll_into_view','browser_visible',
-  'browser_sessions','browser_top_sites','browser_vision','browser_discard'
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_type',
+  'browser_scroll',
+  'browser_back',
+  'browser_press',
+  'browser_get_images',
+  'browser_check',
+  'browser_uncheck',
+  'browser_clear',
+  'browser_hover',
+  'browser_focus',
+  'browser_select',
+  'browser_wait',
+  'browser_read',
+  'browser_grep',
+  'browser_diff',
+  'browser_evaluate',
+  'browser_click_at',
+  'browser_type_at',
+  'browser_hover_at',
+  'browser_drag',
+  'browser_fill',
+  'browser_forward',
+  'browser_reload',
+  'browser_tabs',
+  'browser_windows',
+  'browser_tab_groups',
+  'browser_history',
+  'browser_downloads',
+  'browser_screenshot',
+  'browser_pdf',
+  'browser_upload',
+  'browser_run',
+  'browser_bookmarks',
+  'browser_cookies',
+  'browser_console',
+  'browser_dialog',
+  'browser_page_content',
+  'browser_links',
+  'browser_dom',
+  'browser_search_dom',
+  'browser_zoom',
+  'browser_new_page',
+  'browser_close_page',
+  'browser_switch_tab',
+  'browser_active_tab',
+  'browser_move_page',
+  'browser_exec',
+  'browser_cdp',
+  'browser_hold_click',
+  'browser_network',
+  'browser_clipboard',
+  'browser_viewport',
+  'browser_find',
+  'browser_dblclick',
+  'browser_right_click',
+  'browser_forms',
+  'browser_tables',
+  'browser_meta',
+  'browser_selection',
+  'browser_highlight',
+  'browser_frames',
+  'browser_storage',
+  'browser_attrs',
+  'browser_count',
+  'browser_scroll_into_view',
+  'browser_visible',
+  'browser_sessions',
+  'browser_top_sites',
+  'browser_vision',
+  'browser_discard'
 ]);
 
+// Public BrowserOS MCP catalog names → companion actions. Ideas only, no source.
 const TOOL_ALIASES = {
-  navigate_page: 'browser_navigate', new_page: 'browser_new_page',
-  close_page: 'browser_close_page', list_pages: 'browser_tabs',
-  show_page: 'browser_switch_tab', get_active_page: 'browser_active_tab',
-  move_page: 'browser_move_page', take_snapshot: 'browser_snapshot',
-  take_enhanced_snapshot: 'browser_snapshot', get_page_content: 'browser_page_content',
-  get_page_links: 'browser_links', get_dom: 'browser_dom',
-  search_dom: 'browser_search_dom', take_screenshot: 'browser_screenshot',
-  evaluate_script: 'browser_evaluate', press_key: 'browser_press',
-  upload_file: 'browser_upload', handle_dialog: 'browser_dialog',
-  save_pdf: 'browser_pdf', save_screenshot: 'browser_screenshot',
-  download_file: 'browser_downloads', list_windows: 'browser_windows',
-  create_window: 'browser_windows', close_window: 'browser_windows',
-  activate_window: 'browser_windows', list_tab_groups: 'browser_tab_groups',
-  group_tabs: 'browser_tab_groups', update_tab_group: 'browser_tab_groups',
-  ungroup_tabs: 'browser_tab_groups', close_tab_group: 'browser_tab_groups',
-  get_bookmarks: 'browser_bookmarks', create_bookmark: 'browser_bookmarks',
-  remove_bookmark: 'browser_bookmarks', update_bookmark: 'browser_bookmarks',
-  search_bookmarks: 'browser_bookmarks', search_history: 'browser_history',
-  get_recent_history: 'browser_history', delete_history_url: 'browser_history',
-  delete_history_range: 'browser_history', act: 'browser_act',
-  browser_exec: 'browser_exec', hold_click: 'browser_hold_click',
-  long_click: 'browser_hold_click', list_network_requests: 'browser_network',
-  get_network_request: 'browser_network', resize_page: 'browser_viewport',
-  dblclick: 'browser_dblclick', double_click: 'browser_dblclick',
-  right_click: 'browser_right_click', context_click: 'browser_right_click',
-  get_forms: 'browser_forms', get_tables: 'browser_tables',
-  page_meta: 'browser_meta', get_selection: 'browser_selection',
-  list_iframes: 'browser_frames', local_storage: 'browser_storage',
-  recently_closed: 'browser_sessions', top_sites: 'browser_top_sites'
+  navigate_page: 'browser_navigate',
+  new_page: 'browser_new_page',
+  close_page: 'browser_close_page',
+  list_pages: 'browser_tabs',
+  show_page: 'browser_switch_tab',
+  get_active_page: 'browser_active_tab',
+  move_page: 'browser_move_page',
+  take_snapshot: 'browser_snapshot',
+  take_enhanced_snapshot: 'browser_snapshot',
+  get_page_content: 'browser_page_content',
+  get_page_links: 'browser_links',
+  get_dom: 'browser_dom',
+  search_dom: 'browser_search_dom',
+  take_screenshot: 'browser_screenshot',
+  evaluate_script: 'browser_evaluate',
+  press_key: 'browser_press',
+  upload_file: 'browser_upload',
+  handle_dialog: 'browser_dialog',
+  save_pdf: 'browser_pdf',
+  save_screenshot: 'browser_screenshot',
+  download_file: 'browser_downloads',
+  list_windows: 'browser_windows',
+  create_window: 'browser_windows',
+  close_window: 'browser_windows',
+  activate_window: 'browser_windows',
+  list_tab_groups: 'browser_tab_groups',
+  group_tabs: 'browser_tab_groups',
+  update_tab_group: 'browser_tab_groups',
+  ungroup_tabs: 'browser_tab_groups',
+  close_tab_group: 'browser_tab_groups',
+  get_bookmarks: 'browser_bookmarks',
+  create_bookmark: 'browser_bookmarks',
+  remove_bookmark: 'browser_bookmarks',
+  update_bookmark: 'browser_bookmarks',
+  search_bookmarks: 'browser_bookmarks',
+  search_history: 'browser_history',
+  get_recent_history: 'browser_history',
+  delete_history_url: 'browser_history',
+  delete_history_range: 'browser_history',
+  act: 'browser_act',
+  browser_exec: 'browser_exec',
+  hold_click: 'browser_hold_click',
+  long_click: 'browser_hold_click',
+  list_network_requests: 'browser_network',
+  get_network_request: 'browser_network',
+  resize_page: 'browser_viewport',
+  dblclick: 'browser_dblclick',
+  double_click: 'browser_dblclick',
+  right_click: 'browser_right_click',
+  context_click: 'browser_right_click',
+  get_forms: 'browser_forms',
+  get_tables: 'browser_tables',
+  page_meta: 'browser_meta',
+  get_selection: 'browser_selection',
+  list_iframes: 'browser_frames',
+  local_storage: 'browser_storage',
+  recently_closed: 'browser_sessions',
+  top_sites: 'browser_top_sites'
 };
 
 function canonicalToolName(name = '') {
@@ -563,6 +690,7 @@ function normalizeToolName(entry) {
   return String(entry?.name || entry?.id || entry?.tool || '').trim();
 }
 
+/** Merge the active-tab companion catalog into Hermes runtime metadata. */
 function withCompanionCatalog(runtime = {}) {
   const companion = companionToolNames();
   const toolsets = Array.isArray(runtime.toolsets)
@@ -584,11 +712,14 @@ function withCompanionCatalog(runtime = {}) {
       name: 'companion',
       label: 'Browser companion',
       description: 'Active-tab actions this extension can mirror when Hermes calls them.',
-      enabled: true, configured: true,
-      source: 'hermes-browser-companion', companion: true,
+      enabled: true,
+      configured: true,
+      source: 'hermes-browser-companion',
+      companion: true,
       tools: companion
     });
   }
+
   const enabled = toolsets.filter((row) => row?.enabled !== false);
   const unique = new Set();
   for (const row of enabled) {
@@ -646,6 +777,7 @@ function normalizeCompanionAction(name, args) {
     || (!/^browser[_-]/i.test(raw) ? normalizeBrowserTool(`browser_${raw}`, args) : null);
 }
 
+/** Hermes browser_exec takes Python {code}; models also send a single action or empty args. */
 function coerceRunOrExec(args = {}) {
   const list = extractActionList(args);
   if (list.length === 1) {
@@ -657,11 +789,13 @@ function coerceRunOrExec(args = {}) {
     }
   }
   if (list.length > 1) return { name: 'run', params: { actions: list } };
+
   const expr = args.expression || args.js;
   const code = args.code || args.script || args.python;
   if (expr && looksLikeJsExpression(expr)) return { name: 'evaluate', params: { expression: expr } };
   if (code && looksLikeJsExpression(code)) return { name: 'evaluate', params: { expression: code } };
   if (code || expr) return { name: 'snapshot', params: {} };
+
   const singleName = args.name || args.action || args.tool;
   if (singleName && !isRunWrapperName(singleName)) {
     return normalizeCompanionAction(singleName, args.params || args.payload || args)
@@ -675,89 +809,160 @@ function normalizeBrowserTool(name, args = {}) {
   const n = canonicalToolName(raw);
   const selector = args.selector || args.element || args.ref || args.target;
   switch (n) {
-    case 'browser_navigate': return { name: 'navigate', params: { url: args.url || args.href } };
-    case 'browser_snapshot': return { name: 'snapshot', params: {} };
-    case 'browser_click': return { name: 'click', params: { selector } };
-    case 'browser_type': return { name: 'type_into', params: { selector, text: args.text ?? args.value ?? '', clear: args.clear !== false } };
-    case 'browser_scroll': return { name: 'scroll', params: { direction: args.direction, amount: args.amount, selector, y: args.y } };
-    case 'browser_back': return { name: 'back', params: {} };
-    case 'browser_press': return { name: 'key', params: { keys: args.key ?? args.keys ?? args.text } };
-    case 'browser_get_images': return { name: 'get_images', params: { limit: args.limit } };
-    case 'browser_check': return { name: 'check', params: { selector } };
-    case 'browser_uncheck': return { name: 'uncheck', params: { selector } };
-    case 'browser_clear': return { name: 'clear', params: { selector } };
-    case 'browser_hover': return { name: 'hover', params: { selector } };
-    case 'browser_focus': return { name: 'focus', params: { selector } };
-    case 'browser_select': return { name: 'select_option', params: { selector, value: args.value ?? args.option ?? args.text } };
-    case 'browser_wait': return { name: 'wait', params: args };
-    case 'browser_read': return { name: 'read', params: { selector, prop: args.prop } };
-    case 'browser_grep': return { name: 'grep', params: { pattern: args.pattern || args.query, over: args.over, limit: args.limit } };
-    case 'browser_diff': return { name: 'diff', params: { baseline: args.baseline || args.key } };
-    case 'browser_evaluate': return { name: 'evaluate', params: { expression: args.expression || args.script || args.js } };
-    case 'browser_click_at': return { name: 'click_at', params: { x: args.x, y: args.y, button: args.button, clickCount: args.clickCount } };
-    case 'browser_type_at': return { name: 'type_into', params: { selector, text: args.text ?? args.value, clear: args.clear } };
-    case 'browser_hover_at': return { name: 'hover_at', params: { selector, x: args.x, y: args.y } };
-    case 'browser_drag': return { name: 'drag', params: { ref: args.ref || args.from, targetRef: args.targetRef || args.to } };
-    case 'browser_fill': return { name: 'fill_many', params: { fields: args.fields || [] } };
-    case 'browser_forward': return { name: 'forward', params: {} };
-    case 'browser_reload': return { name: 'reload', params: {} };
-    case 'browser_tabs': return { name: 'tabs', params: args };
-    case 'browser_new_page': return { name: 'tabs', params: { action: 'create', ...args } };
-    case 'browser_close_page': return { name: 'tabs', params: { action: 'close', ...args } };
-    case 'browser_switch_tab': return { name: 'tabs', params: { action: 'switch', ...args } };
-    case 'browser_active_tab': return { name: 'tabs', params: { action: 'get_active', ...args } };
-    case 'browser_move_page': return { name: 'tabs', params: { action: 'move', ...args } };
-    case 'browser_windows': return { name: 'windows', params: args.action ? args : { action: inferWindowAction(raw, args), ...args } };
-    case 'browser_tab_groups': return { name: 'tab_groups', params: args.action ? args : { action: inferGroupAction(raw, args), ...args } };
-    case 'browser_history': return { name: 'history', params: args.action ? args : { action: inferHistoryAction(raw, args), ...args } };
-    case 'browser_downloads': return { name: 'downloads', params: args.action ? args : { action: raw === 'download_file' ? 'start' : 'list', ...args } };
-    case 'browser_bookmarks': return { name: 'bookmarks', params: args.action ? args : { action: inferBookmarkAction(raw, args), ...args } };
-    case 'browser_cookies': return { name: 'cookies', params: args };
+    case 'browser_navigate':
+      return { name: 'navigate', params: { url: args.url || args.href } };
+    case 'browser_snapshot':
+      return { name: 'snapshot', params: {} };
+    case 'browser_click':
+      return { name: 'click', params: { selector } };
+    case 'browser_type':
+      return { name: 'type_into', params: { selector, text: args.text ?? args.value ?? '', clear: args.clear !== false } };
+    case 'browser_scroll':
+      return { name: 'scroll', params: { direction: args.direction, amount: args.amount, selector, y: args.y } };
+    case 'browser_back':
+      return { name: 'back', params: {} };
+    case 'browser_press':
+      return { name: 'key', params: { keys: args.key ?? args.keys ?? args.text } };
+    case 'browser_get_images':
+      return { name: 'get_images', params: { limit: args.limit } };
+    case 'browser_check':
+      return { name: 'check', params: { selector } };
+    case 'browser_uncheck':
+      return { name: 'uncheck', params: { selector } };
+    case 'browser_clear':
+      return { name: 'clear', params: { selector } };
+    case 'browser_hover':
+      return { name: 'hover', params: { selector } };
+    case 'browser_focus':
+      return { name: 'focus', params: { selector } };
+    case 'browser_select':
+      return { name: 'select_option', params: { selector, value: args.value ?? args.option ?? args.text } };
+    case 'browser_wait':
+      return { name: 'wait', params: args };
+    case 'browser_read':
+      return { name: 'read', params: { selector, prop: args.prop } };
+    case 'browser_grep':
+      return { name: 'grep', params: { pattern: args.pattern || args.query, over: args.over, limit: args.limit } };
+    case 'browser_diff':
+      return { name: 'diff', params: { baseline: args.baseline || args.key } };
+    case 'browser_evaluate':
+      return { name: 'evaluate', params: { expression: args.expression || args.script || args.js } };
+    case 'browser_click_at':
+      return { name: 'click_at', params: { x: args.x, y: args.y, button: args.button, clickCount: args.clickCount } };
+    case 'browser_type_at':
+      return { name: 'type_into', params: { selector, text: args.text ?? args.value, clear: args.clear } };
+    case 'browser_hover_at':
+      return { name: 'hover_at', params: { selector, x: args.x, y: args.y } };
+    case 'browser_drag':
+      return { name: 'drag', params: { ref: args.ref || args.from, targetRef: args.targetRef || args.to } };
+    case 'browser_fill':
+      return { name: 'fill_many', params: { fields: args.fields || [] } };
+    case 'browser_forward':
+      return { name: 'forward', params: {} };
+    case 'browser_reload':
+      return { name: 'reload', params: {} };
+    case 'browser_tabs':
+      return { name: 'tabs', params: args };
+    case 'browser_new_page':
+      return { name: 'tabs', params: { action: 'create', ...args } };
+    case 'browser_close_page':
+      return { name: 'tabs', params: { action: 'close', ...args } };
+    case 'browser_switch_tab':
+      return { name: 'tabs', params: { action: 'switch', ...args } };
+    case 'browser_active_tab':
+      return { name: 'tabs', params: { action: 'get_active', ...args } };
+    case 'browser_move_page':
+      return { name: 'tabs', params: { action: 'move', ...args } };
+    case 'browser_windows':
+      return { name: 'windows', params: args.action ? args : { action: inferWindowAction(raw, args), ...args } };
+    case 'browser_tab_groups':
+      return { name: 'tab_groups', params: args.action ? args : { action: inferGroupAction(raw, args), ...args } };
+    case 'browser_history':
+      return { name: 'history', params: args.action ? args : { action: inferHistoryAction(raw, args), ...args } };
+    case 'browser_downloads':
+      return { name: 'downloads', params: args.action ? args : { action: raw === 'download_file' ? 'start' : 'list', ...args } };
+    case 'browser_bookmarks':
+      return { name: 'bookmarks', params: args.action ? args : { action: inferBookmarkAction(raw, args), ...args } };
+    case 'browser_cookies':
+      return { name: 'cookies', params: args };
     case 'browser_console':
       if (args.expression || args.js || args.code) {
         return { name: 'evaluate', params: { expression: args.expression || args.js || args.code } };
       }
       return { name: 'console', params: args };
-    case 'browser_dialog': return { name: 'dialog', params: args };
-    case 'browser_page_content': return { name: 'page_content', params: args };
-    case 'browser_links': return { name: 'page_links', params: args };
-    case 'browser_dom': return { name: 'page_dom', params: args };
-    case 'browser_search_dom': return { name: 'search_dom', params: args };
-    case 'browser_zoom': return { name: 'zoom', params: args };
+    case 'browser_dialog':
+      return { name: 'dialog', params: args };
+    case 'browser_page_content':
+      return { name: 'page_content', params: args };
+    case 'browser_links':
+      return { name: 'page_links', params: args };
+    case 'browser_dom':
+      return { name: 'page_dom', params: args };
+    case 'browser_search_dom':
+      return { name: 'search_dom', params: args };
+    case 'browser_zoom':
+      return { name: 'zoom', params: args };
     case 'browser_screenshot':
-    case 'browser_vision': return { name: 'screenshot', params: args };
-    case 'browser_pdf': return { name: 'pdf', params: args };
-    case 'browser_upload': return { name: 'upload', params: args };
+    case 'browser_vision':
+      return { name: 'screenshot', params: args };
+    case 'browser_pdf':
+      return { name: 'pdf', params: args };
+    case 'browser_upload':
+      return { name: 'upload', params: args };
     case 'browser_run':
-    case 'browser_exec': return coerceRunOrExec(args);
-    case 'browser_cdp': return { name: 'cdp_info', params: args };
-    case 'browser_hold_click': return { name: 'hold_click', params: { selector, ms: args.ms ?? args.duration ?? args.timeout } };
-    case 'browser_network': return { name: 'network', params: args };
-    case 'browser_clipboard': return { name: 'clipboard', params: args };
-    case 'browser_viewport': return { name: 'viewport', params: args };
-    case 'browser_find': return { name: 'find', params: { pattern: args.pattern || args.query || args.text, limit: args.limit } };
-    case 'browser_dblclick': return { name: 'dblclick', params: { selector } };
-    case 'browser_right_click': return { name: 'right_click', params: { selector } };
-    case 'browser_forms': return { name: 'forms', params: args };
-    case 'browser_tables': return { name: 'tables', params: args };
-    case 'browser_meta': return { name: 'meta', params: args };
-    case 'browser_selection': return { name: 'selection', params: args };
-    case 'browser_highlight': return { name: 'highlight', params: { text: args.text || args.query || args.pattern } };
-    case 'browser_frames': return { name: 'frames', params: args };
-    case 'browser_storage': return { name: 'storage', params: args };
-    case 'browser_attrs': return { name: 'attrs', params: { selector, names: args.names || args.attrs } };
-    case 'browser_count': return { name: 'count', params: { selector: args.selector || args.css || selector } };
-    case 'browser_scroll_into_view': return { name: 'scroll_into_view', params: { selector } };
-    case 'browser_visible': return { name: 'visible', params: { selector } };
-    case 'browser_sessions': return { name: 'sessions', params: args };
-    case 'browser_top_sites': return { name: 'top_sites', params: args };
-    case 'browser_discard': return { name: 'discard', params: args };
+    case 'browser_exec':
+      return coerceRunOrExec(args);
+    case 'browser_cdp':
+      return { name: 'cdp_info', params: args };
+    case 'browser_hold_click':
+      return { name: 'hold_click', params: { selector, ms: args.ms ?? args.duration ?? args.timeout } };
+    case 'browser_network':
+      return { name: 'network', params: args };
+    case 'browser_clipboard':
+      return { name: 'clipboard', params: args };
+    case 'browser_viewport':
+      return { name: 'viewport', params: args };
+    case 'browser_find':
+      return { name: 'find', params: { pattern: args.pattern || args.query || args.text, limit: args.limit } };
+    case 'browser_dblclick':
+      return { name: 'dblclick', params: { selector } };
+    case 'browser_right_click':
+      return { name: 'right_click', params: { selector } };
+    case 'browser_forms':
+      return { name: 'forms', params: args };
+    case 'browser_tables':
+      return { name: 'tables', params: args };
+    case 'browser_meta':
+      return { name: 'meta', params: args };
+    case 'browser_selection':
+      return { name: 'selection', params: args };
+    case 'browser_highlight':
+      return { name: 'highlight', params: { text: args.text || args.query || args.pattern } };
+    case 'browser_frames':
+      return { name: 'frames', params: args };
+    case 'browser_storage':
+      return { name: 'storage', params: args };
+    case 'browser_attrs':
+      return { name: 'attrs', params: { selector, names: args.names || args.attrs } };
+    case 'browser_count':
+      return { name: 'count', params: { selector: args.selector || args.css || selector } };
+    case 'browser_scroll_into_view':
+      return { name: 'scroll_into_view', params: { selector } };
+    case 'browser_visible':
+      return { name: 'visible', params: { selector } };
+    case 'browser_sessions':
+      return { name: 'sessions', params: args };
+    case 'browser_top_sites':
+      return { name: 'top_sites', params: args };
+    case 'browser_discard':
+      return { name: 'discard', params: args };
     case 'browser_act': {
       const actName = args.name || args.action || args.tool;
       if (!actName || !isBrowserCompanionTool(actName) || canonicalToolName(actName) === 'browser_act') return null;
       return normalizeBrowserTool(actName, args.params || args.payload || args);
     }
-    default: return null;
+    default:
+      return null;
   }
 }
 
@@ -805,8 +1010,10 @@ async function runAgent(threadId, runId, input, res) {
   };
   if (origin && isAllowedOrigin(origin)) headers['Access-Control-Allow-Origin'] = origin;
   res.writeHead(200, headers);
+
   res.write(sse(runStarted(threadId, runId)));
   res.write(sse(custom('agent-status', { phase: 'thinking', label: 'Thinking…' })));
+
   const roleMessages = (input.messages || []).map((m) => ({
     id: m.id || uid('msg_'),
     role: m.role || 'user',
@@ -814,19 +1021,24 @@ async function runAgent(threadId, runId, input, res) {
   }));
   res.write(sse(messagesSnapshot(roleMessages)));
   if (input.state) res.write(sse(stateSnapshot(input.state)));
+
   const userText = buildHermesPrompt(input, threadId);
   const messageId = uid('asst_');
   let cancelIfClientGone = null;
+
   try {
     const { stream, sessionId, stream_id: streamId } = await hermes.chatStream(userText, {
-      model: input.model, modelProvider: input.modelProvider,
+      model: input.model,
+      modelProvider: input.modelProvider,
       workspace: input.workspace,
       attached: attachPin(input, threadId).attached,
       sessionId: sessionIdForThread(threadId, input.model, input.modelProvider)
     });
     if (threadId && sessionId) {
       rememberThread(hermesSessions, threadId, {
-        sessionId, model: input.model || '', provider: input.modelProvider || ''
+        sessionId,
+        model: input.model || '',
+        provider: input.modelProvider || ''
       });
     }
     const req = res.req;
@@ -834,19 +1046,24 @@ async function runAgent(threadId, runId, input, res) {
       if (!res.writableEnded) hermes.cancelStream(streamId).catch(() => {});
     };
     req?.once?.('close', cancelIfClientGone);
+
     res.write(sse(textStart(messageId)));
     const toolAccum = new Map();
     const announcedTools = new Set();
     const mirroredTools = new Set();
     let sawVisibleText = false;
+
     const takeText = (payload) => {
       if (payload == null) return '';
       if (typeof payload === 'string') return payload;
       return String(payload.text || payload.delta || payload.content || payload.output || payload.message || '');
     };
+
     for await (const { event, data, final } of readSSE(stream)) {
       if (final) break;
       const eventName = String(event || data?.type || '').toLowerCase();
+      // Only the Hermes run terminal events end the turn. tool_complete and
+      // step "complete" payloads often set done:true and must not stop tokens.
       if (eventName === 'done' || eventName === 'stream_end') break;
       if (!data) continue;
       if ((eventName === 'token' || eventName === 'interim_assistant' || eventName === 'assistant' || eventName === 'text' || eventName === 'output') && !data.already_streamed) {
@@ -858,6 +1075,7 @@ async function runAgent(threadId, runId, input, res) {
         continue;
       }
       if (eventName === 'reasoning' || eventName === 'thinking') {
+        // Never expose raw hidden reasoning; expose lifecycle only.
         res.write(sse(custom('agent-status', { phase: 'reasoning', label: 'Reasoning…' })));
         continue;
       }
@@ -878,6 +1096,7 @@ async function runAgent(threadId, runId, input, res) {
         }
         continue;
       }
+
       if (eventName === 'tool_complete' || eventName === 'tool_result') {
         continue;
       }
@@ -889,6 +1108,7 @@ async function runAgent(threadId, runId, input, res) {
         }
         continue;
       }
+
       if (eventName === 'tool' || eventName === 'tool_call' || data.type === 'tool_call' || (data.name && data.args !== undefined)) {
         const tcid = data.tool_call_id || data.id || uid('tool_');
         const name = data.name || data.tool_name || toolAccum.get(tcid)?.name || '';
@@ -899,27 +1119,36 @@ async function runAgent(threadId, runId, input, res) {
         else existing.args = args;
         toolAccum.set(tcid, existing);
         mirrorBrowserAction(threadId, tcid, existing, res, mirroredTools, input);
+
         if (!announcedTools.has(tcid)) {
           announcedTools.add(tcid);
           res.write(sse(toolStart(tcid, existing.name)));
           res.write(sse(custom('agent-status', {
             phase: 'tool',
             label: existing.name ? `Using ${existing.name}…` : 'Using a tool…',
-            toolCallId: tcid, toolName: existing.name
+            toolCallId: tcid,
+            toolName: existing.name
           })));
         }
         continue;
       }
+
     }
+
     if (!sawVisibleText) {
       res.write(sse(textDelta(messageId, 'The selected model returned no visible text. Try another model, or press Stop and send again.')));
     }
     res.write(sse(textEnd(messageId)));
+
     for (const [tcid, tool] of toolAccum) {
       if (!announcedTools.has(tcid)) res.write(sse(toolStart(tcid, tool.name)));
       res.write(sse(toolDelta(tcid, tool.args)));
       res.write(sse(toolEnd(tcid)));
     }
+
+    // Give fast active-tab actions a short bounded window to arrive on the
+    // same AG-UI stream. This is deliberately finite and cannot deadlock on
+    // Hermes tool execution.
     if ([...mirrorStreams.values()].some((entry) => entry.res === res)) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
@@ -933,11 +1162,13 @@ async function runAgent(threadId, runId, input, res) {
   }
 }
 
+/** Build the Hermes turn with page context + role-preserving conversation. */
 function buildHermesPrompt(input, threadId = input.threadId) {
   const parts = [];
   const pageContext = (input.context || []).find((ctx) => ctx.type === 'page_context' || ctx.document);
   const pin = attachPin(input, threadId);
   const attached = pin.attached;
+
   for (const ctx of input.context || []) {
     if (ctx.type === 'page_context' || ctx.document) {
       parts.push(
@@ -954,6 +1185,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
       parts.push(`[CONTEXT ${ctx.type || 'context'}]\n${JSON.stringify(ctx)}`);
     }
   }
+
   if (attached) {
     const url = pin.url || pageContext?.url || input.attachedTab?.url || '';
     const tabId = pin.tabId ?? pageContext?.tabId ?? input.attachedTab?.id;
@@ -968,6 +1200,7 @@ function buildHermesPrompt(input, threadId = input.threadId) {
       `If you need more of the page, call browser_snapshot, browser_page_content, browser_read, browser_scroll, or browser_grep.`
     );
   }
+
   for (const message of input.messages || []) {
     const role = String(message.role || 'user').toLowerCase();
     const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
@@ -976,16 +1209,28 @@ function buildHermesPrompt(input, threadId = input.threadId) {
     else if (role === 'system') parts.push(`[SYSTEM]\n${content}`);
     else if (role === 'user') parts.push(`[USER REQUEST]\n${content}`);
   }
+
   const mirrorResults = threadMirrorResults.get(threadId) || [];
   if (mirrorResults.length) {
     parts.push(`[VERIFIED ACTIVE TAB RESULTS]\n${mirrorResults.map((item) => `- ${item.toolName || 'browser tool'}: ${JSON.stringify(item.result)}`).join('\n')}`);
   }
+
+  // Keep this list aligned with Hermes' current core browser tool reference.
+  // These are Hermes-native capabilities, not invented extension-only tools.
   const tools = [
-    'browser_snapshot()','browser_read(@eN)','browser_grep(pattern)',
-    'browser_click(@eN)','browser_type(@eN, text)','browser_fill(fields[])',
-    'browser_press(key)','browser_scroll(direction)','browser_wait(selector? | text?)',
-    'browser_navigate(url)','browser_tabs(action=list|create|switch)',
-    'browser_screenshot()','browser_run(actions[])'
+    'browser_snapshot()',
+    'browser_read(@eN)',
+    'browser_grep(pattern)',
+    'browser_click(@eN)',
+    'browser_type(@eN, text)',
+    'browser_fill(fields[])',
+    'browser_press(key)',
+    'browser_scroll(direction)',
+    'browser_wait(selector? | text?)',
+    'browser_navigate(url)',
+    'browser_tabs(action=list|create|switch)',
+    'browser_screenshot()',
+    'browser_run(actions[])'
   ];
   parts.push(
     `[HERMES BROWSER TOOLSET]\n${tools.join('\n')}\n\n` +
@@ -994,10 +1239,14 @@ function buildHermesPrompt(input, threadId = input.threadId) {
       : 'When no page is attached, prefer web_search/web_extract for simple information retrieval and browser tools for interaction. ') +
     'Answer the user in plain language first. Do not print fake JSON tool calls as prose. The browser companion mirrors compatible browser actions into the user\'s attached tab.'
   );
+
   if (attached) parts.unshift(workingBrowserBlock(pin));
   return parts.join('\n\n').trim();
 }
 
+// ---------------------------------------------------------------------------
+// Hermes model/runtime proxy helpers
+// ---------------------------------------------------------------------------
 function pushInventoryModel(out, seen, item, provider, providerLabel, extra = {}) {
   const rawId = typeof item === 'string' ? item : (item?.id || item?.model || item?.name);
   if (!rawId) return;
@@ -1027,6 +1276,8 @@ function groupModelBuckets(group = {}) {
   ];
 }
 
+// Memoize the model inventory so panel opens and tab switches do not hammer
+// Hermes with two API calls each. Refreshes every 90s or on cache-bust.
 let modelInventoryCache = { at: 0, value: null };
 const MODEL_CACHE_MS = 90_000;
 async function modelInventory({ force = false } = {}) {
@@ -1034,8 +1285,11 @@ async function modelInventory({ force = false } = {}) {
   if (!force && modelInventoryCache.value && now - modelInventoryCache.at < MODEL_CACHE_MS) {
     return modelInventoryCache.value;
   }
+
   const out = [];
   const seen = new Set();
+
+  // 1. Hermes analytics — marks models that have been used (configured=true)
   let analyticsByProvider = new Map();
   try {
     const analyticsData = await hermes.requestJson('/api/analytics/models');
@@ -1047,6 +1301,8 @@ async function modelInventory({ force = false } = {}) {
       }
     }
   } catch {}
+
+  // 2. LM Studio — query directly for all loaded models
   try {
     const creds = await getProviderCredentials();
     if (creds.lmstudio) {
@@ -1054,15 +1310,24 @@ async function modelInventory({ force = false } = {}) {
         `${creds.lmstudio.baseUrl}/v1/models`,
         { Authorization: `Bearer ${creds.lmstudio.apiKey}` }
       );
-      const isConfigured = (id) => (analyticsByProvider.get('lmstudio') || new Set()).has(id);
+      const isConfigured = (id) =>
+        (analyticsByProvider.get('lmstudio') || new Set()).has(id);
       for (const m of models) {
         const id = m.id || m.model || m;
         if (!id || seen.has(`lmstudio/${id}`)) continue;
         seen.add(`lmstudio/${id}`);
-        out.push({ id, provider: 'lmstudio', label: id, configured: isConfigured(id), source: 'lmstudio' });
+        out.push({
+          id,
+          provider: 'lmstudio',
+          label: id,
+          configured: isConfigured(id),
+          source: 'lmstudio'
+        });
       }
     }
   } catch {}
+
+  // 3. MiniMax — query the MiniMax model catalog
   try {
     const creds = await getProviderCredentials();
     if (creds.minimax?.apiKey) {
@@ -1070,25 +1335,38 @@ async function modelInventory({ force = false } = {}) {
         `${creds.minimax.baseUrl}/models`,
         { Authorization: `Bearer ${creds.minimax.apiKey}` }
       );
-      const isConfigured = (id) => (analyticsByProvider.get('minimax') || new Set()).has(id);
+      const isConfigured = (id) =>
+        (analyticsByProvider.get('minimax') || new Set()).has(id);
       for (const m of models) {
         const id = m.id || m.model || m;
         if (!id || seen.has(`minimax/${id}`)) continue;
         seen.add(`minimax/${id}`);
-        out.push({ id, provider: 'minimax', label: id, configured: isConfigured(id), source: 'minimax' });
+        out.push({
+          id,
+          provider: 'minimax',
+          label: id,
+          configured: isConfigured(id),
+          source: 'minimax'
+        });
       }
     }
   } catch {}
+
+  // Sort: configured first, then by provider label, then by model label
   out.sort((a, b) => {
     const configuredDelta = Number(Boolean(b.configured)) - Number(Boolean(a.configured));
     if (configuredDelta) return configuredDelta;
     return String(a.provider || '').localeCompare(String(b.provider || '')) ||
       String(a.label || '').localeCompare(String(b.label || ''));
   });
+
   modelInventoryCache = { at: now, value: out };
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// HTTP + WebSocket server
+// ---------------------------------------------------------------------------
 const server = http.createServer(async (req, res) => {
   const origin = String(req.headers.origin || '');
   if (!isAllowedOrigin(origin)) {
@@ -1096,16 +1374,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   applyCors(req, res);
+
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
     return;
   }
+
   if (!isAuthorized(req)) {
     json(res, 401, { error: 'unauthorized' });
     return;
   }
+
   const route = (req.url || '').split('?')[0];
+
   if (req.method === 'GET' && route === '/v1/models') {
     try {
       const force = /(^|[?&])refresh=1\b/.test(String(req.url || ''));
@@ -1121,6 +1403,7 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+
   if (req.method === 'GET' && route === '/v1/runtime') {
     try {
       const runtime = withCompanionCatalog(await hermes.runtimeOverview());
@@ -1134,10 +1417,14 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+
   if (req.method === 'GET' && route === '/healthz') {
     let hermesOk = false;
     let hermesInfo = '';
     try {
+      // The Hermes API server exposes /v1/models as a cheap reachability probe.
+      // It accepts the same Bearer auth as the rest of the API surface and
+      // returns a stable response shape even when no models are configured.
       await hermes.requestJson('/v1/models');
       hermesOk = true;
       hermesInfo = 'authenticated';
@@ -1145,12 +1432,18 @@ const server = http.createServer(async (req, res) => {
       hermesInfo = e.message;
     }
     json(res, 200, {
-      ok: true, hermes: cfg.hermesUrl, hermesOk, hermesInfo,
-      wsClients: wsClients.size, pendingBrowserActions: pendingToolResults.size,
-      authRequired: Boolean(cfg.authToken), version: '0.3.6'
+      ok: true,
+      hermes: cfg.hermesUrl,
+      hermesOk,
+      hermesInfo,
+      wsClients: wsClients.size,
+      pendingBrowserActions: pendingToolResults.size,
+      authRequired: Boolean(cfg.authToken),
+      version: '0.3.6'
     });
     return;
   }
+
   if (req.method === 'POST' && route === '/tool-result') {
     let body;
     try { body = await readRequestBody(req); }
@@ -1164,6 +1457,7 @@ const server = http.createServer(async (req, res) => {
     json(res, matched ? 200 : 404, { ok: matched });
     return;
   }
+
   if (req.method === 'POST' && route === '/agent') {
     let body;
     try { body = await readRequestBody(req); }
@@ -1172,8 +1466,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     let input;
-    try { input = JSON.parse(body); }
-    catch (e) {
+    try {
+      input = JSON.parse(body);
+    } catch (e) {
       json(res, 400, { error: { message: 'Invalid JSON: ' + e.message } });
       return;
     }
@@ -1182,6 +1477,7 @@ const server = http.createServer(async (req, res) => {
     await runAgent(threadId, runId, input, res);
     return;
   }
+
   json(res, 404, { error: 'not_found' });
 });
 
@@ -1210,4 +1506,5 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[hermes-bridge] hermes          : ${cfg.hermesUrl}`);
   console.log(`[hermes-bridge] model           : ${cfg.model} (${cfg.modelProvider})`);
   console.log(`[hermes-bridge] auth            : ${cfg.authToken ? 'token required' : 'local-only / no bridge token'}`);
+  if (!cfg.password) console.warn('[hermes-bridge] WARNING: HERMES_PASSWORD not set — Hermes login will fail.');
 });
