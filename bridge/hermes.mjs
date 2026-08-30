@@ -1,64 +1,92 @@
 /**
- * hermes.mjs — client for the Hermes Agent API server used by the bridge.
- *
- * The bridge talks to the Hermes API server (gateway/platforms/api_server.py),
- * which exposes OpenAI-compatible and Hermes-native session/chat endpoints.
- * That server is started by `hermes gateway` when `API_SERVER_ENABLED=true`
- * is set in `~/.hermes/.env`. Auth is `Authorization: Bearer <API_SERVER_KEY>`.
+ * hermes.mjs — client for the Hermes WebUI REST API used by the bridge.
  *
  * Chat pattern:
- *   1. POST /api/sessions                          -> {session: {id: ...}}
- *   2. POST /api/sessions/{id}/chat/stream         -> SSE (assistant.delta, tool.started, ...)
+ *   1. POST /api/auth/login {password} -> Set-Cookie: hermes_session=<v>
+ *   2. POST /api/session/new -> {session: {session_id}}
+ *   3. POST /api/chat/start  -> {stream_id}
+ *   4. GET  /api/chat/stream?stream_id=<id> -> SSE (typed `event:` frames)
  *
- * The same client also reads Hermes-native dashboard metadata (toolsets,
- * skills, sessions list) from the same API server via the /api/credentials/pool
- * and /api/tools/toolsets endpoints. No separate dashboard session token is
- * needed because every endpoint behind the API server shares the same Bearer
- * key.
+ * The client also exposes requestJson() so the browser companion can read
+ * Hermes-native dashboard metadata (toolsets, skills, etc.) without duplicating
+ * Hermes configuration logic in the extension.
  */
 import { EventEmitter } from 'node:events';
 
 export class HermesClient extends EventEmitter {
-  /** @param {Object} cfg {baseUrl, apiKey, password, model, modelProvider, workspace} */
+  /** @param {Object} cfg {baseUrl, password, model, modelProvider, workspace} */
   constructor(cfg = {}) {
     super();
-    // Default points at the API server (port 8642). Falls back to 8787 for
-    // backwards compatibility with older env that didn't enable API_SERVER.
-    this.baseUrl = (cfg.baseUrl || process.env.HERMES_API_URL
-      || 'http://127.0.0.1:8642').replace(/\/+$/, '');
-    // Bearer key. Either provided directly or picked up from API_SERVER_KEY.
-    this.apiKey = cfg.apiKey || process.env.HERMES_API_KEY || process.env.API_SERVER_KEY || '';
-    // Legacy fields kept for backwards-compat with old env files.
-    this.password = cfg.password || process.env.HERMES_WEBUI_PASSWORD || '';
-    this.model = cfg.model || 'ornith-1.5-35b-a3b';
+    this.baseUrl = (cfg.baseUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+    this.password = cfg.password || '';
+    this.model = cfg.model || 'qwen3.5-9b';
     this.modelProvider = cfg.modelProvider || 'lmstudio';
     this.workspace = cfg.workspace || '';
+    this._cookie = null;
+    this._cookieExpiry = 0;
     this._sessionId = null;
     this._streamId = null;
   }
 
-  _authHeaders(extra = {}) {
-    const headers = { Accept: 'application/json', ...extra };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-    return headers;
+  async _login(force = false) {
+    if (!force && this._cookie && this._cookieExpiry > Date.now() + 60_000) return this._cookie;
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let r;
+    try {
+      r = await fetch(`${this.baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: this.password }),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      throw new Error(`Hermes login failed: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!r.ok) throw new Error(`Hermes login: HTTP ${r.status}`);
+    const cookies = typeof r.headers.getSetCookie === 'function'
+      ? r.headers.getSetCookie()
+      : [r.headers.get('set-cookie') || ''];
+    let session = '';
+    for (const header of cookies) {
+      const match = String(header || '').match(/(?:^|[,\s])hermes_session=([^;]+)/);
+      if (match) {
+        session = match[1];
+        break;
+      }
+    }
+    if (!session) throw new Error('Hermes login OK but no hermes_session cookie');
+    this._cookie = `hermes_session=${session}`;
+    this._cookieExpiry = Date.now() + 25 * 60_000;
+    return this._cookie;
   }
 
   /**
-   * Authenticated JSON request to the Hermes API server.
-   * Retries once after a 401/403 — that usually means the cached key drifted
-   * (the server restarted with a new key, or we got one from env that no
-   * longer matches). We can't refresh on our own, so just surface the error.
+   * Authenticated JSON request to the Hermes WebUI API.
+   * Retries once after a 401/403 in case the cached Hermes session expired.
    */
   async requestJson(apiPath, options = {}) {
     const path = String(apiPath || '').startsWith('/') ? String(apiPath) : `/${apiPath}`;
     const method = String(options.method || 'GET').toUpperCase();
-    const headers = this._authHeaders({ ...(options.headers || {}) });
-    let body;
-    if (options.body !== undefined) {
-      headers['Content-Type'] = 'application/json';
-      body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
-    }
-    const res = await fetch(`${this.baseUrl}${path}`, { method, headers, body });
+    const doRequest = async (forceLogin = false) => {
+      const cookie = await this._login(forceLogin);
+      const headers = {
+        Accept: 'application/json',
+        Cookie: cookie,
+        ...(options.headers || {})
+      };
+      let body;
+      if (options.body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+      }
+      return fetch(`${this.baseUrl}${path}`, { method, headers, body });
+    };
+
+    let res = await doRequest(false);
+    if (res.status === 401 || res.status === 403) res = await doRequest(true);
     const text = await res.text().catch(() => '');
     let data = null;
     if (text) {
@@ -122,22 +150,29 @@ export class HermesClient extends EventEmitter {
   }
 
   async _ensureSession({ attached = false } = {}) {
+    const cookie = await this._login();
     if (this._sessionId) return this._sessionId;
-    const data = await this.requestJson('/api/sessions', {
+    const r = await fetch(`${this.baseUrl}/api/session/new`, {
       method: 'POST',
-      body: {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        workspace: this.workspace || undefined,
         model: this.model,
-        provider: this.modelProvider,
-        workspace: this.workspace || undefined
+        model_provider: this.modelProvider,
         // Attached companion chats already have the live Chrome tab. Enabling
         // Hermes' native browser / browser-use toolsets here launches a second
         // browser (or fails those tools) while the companion is already acting.
-      }
+        enabled_toolsets: ['hermes-cli', 'browser', 'skills', 'memory', 'todo']
+      })
     });
-    const sessionId = (data?.session?.id) || data?.session_id || data?.id;
-    if (!sessionId) throw new Error('Hermes session create returned no id');
-    this._sessionId = sessionId;
-    return sessionId;
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Hermes session/new: HTTP ${r.status} ${t.slice(0, 200)}`);
+    }
+    const data = await r.json();
+    this._sessionId = (data.session && data.session.session_id) || data.session_id;
+    if (!this._sessionId) throw new Error('Hermes session/new returned no session_id');
+    return this._sessionId;
   }
 
   /**
@@ -146,6 +181,10 @@ export class HermesClient extends EventEmitter {
    * @param {Object} extra {workspace?, model?, modelProvider?, sessionId?}
    */
   async chatStream(message, extra = {}) {
+    const cookie = await this._login();
+    // Only reuse a Hermes session when the caller mapped one to this thread.
+    // Falling back to the singleton session made "New conversation" continue
+    // the previous Hermes turn.
     let sessionId = extra.sessionId || null;
     if (!sessionId) {
       this.resetSession();
@@ -160,52 +199,105 @@ export class HermesClient extends EventEmitter {
       modelProvider = qualified[1];
       model = qualified[2];
     }
-
     const body = {
+      session_id: sessionId,
       message,
       model,
-      provider: modelProvider,
+      model_provider: modelProvider,
       workspace: extra.workspace || this.workspace || undefined
     };
 
-    const startChat = () => fetch(
-      `${this.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/chat/stream`,
-      {
-        method: 'POST',
-        headers: this._authHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
-        body: JSON.stringify(body)
-      }
-    );
+    const startChat = async () => fetch(`${this.baseUrl}/api/chat/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify(body)
+    });
 
-    const readError = async (response) => {
+    const readStartError = async (response) => {
       const text = await response.text().catch(() => '');
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = null; }
       return { text, data };
     };
 
-    let res = await startChat();
-    if (res.status === 404 || (res.status === 409 && /session\s+not\s+found/i.test((await res.clone().text().catch(() => ''))))) {
-      // Session evaporated between _ensureSession and start — drop and retry.
+    let start = await startChat();
+    let startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    if (start.status === 401 || start.status === 403) {
+      await this._login(true);
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    }
+    if (start.status === 409) {
+      // Two distinct 409 shapes exist today:
+      //   - "session already has an active stream"   → cancel that stream, retry once
+      //   - "Hermes Agent was updated while WebUI was running" (agent_runtime_stale, retryable)
+      //     → cancel any stuck stream + drop the session so _ensureSession
+      //       recreates it with the freshly-updated Hermes runtime
+      const stale = /agent_runtime_stale|was updated while/i.test(startError.text);
+      const stuckId = startError.data?.active_stream_id || this._streamId || '';
+      if (stuckId) await this.cancelStream(stuckId);
+      if (stale) this.resetSession();
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
+    }
+    if (start.status === 409 || (start.status === 404 && /session\s+not\s+found/i.test(startError.text))) {
       this.resetSession();
       sessionId = await this._ensureSession({ attached: Boolean(extra.attached) });
       body.session_id = sessionId;
-      res = await startChat();
+      start = await startChat();
+      startError = start.ok ? { text: '', data: null } : await readStartError(start);
     }
-    if (!res.ok || !res.body) {
-      const errInfo = await readError(res);
-      throw new Error(`Hermes chat/stream: HTTP ${res.status} ${errInfo.text.slice(0, 200)}`);
+    if (!start.ok) {
+      throw new Error(`Hermes chat/start: HTTP ${start.status} ${startError.text.slice(0, 200)}`);
     }
-    this._streamId = sessionId;
-    return { stream: res.body, sessionId, stream_id: sessionId };
+
+    const j = await start.json().catch(() => ({}));
+    if (!j.stream_id) throw new Error('Hermes chat/start returned no stream_id');
+    const streamId = j.stream_id;
+
+    let res = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`, {
+      headers: { Cookie: await this._login(), Accept: 'text/event-stream' }
+    });
+    if (res.status === 401 || res.status === 403) {
+      const retryCookie = await this._login(true);
+      res = await fetch(`${this.baseUrl}/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`, {
+        headers: { Cookie: retryCookie, Accept: 'text/event-stream' }
+      });
+    }
+    if (!res.ok || !res.body) throw new Error(`Hermes chat/stream: HTTP ${res.status}`);
+    this._streamId = streamId;
+    return { stream: res.body, sessionId, stream_id: streamId };
   }
 
   async cancelStream(streamId = this._streamId) {
-    // The API server doesn't expose a per-stream cancel endpoint; sessions
-    // are aborted by deleting them or by sending another prompt with the
-    // `require_model_lock` flag. Best-effort: no-op.
-    this._streamId = null;
-    return false;
+    const id = String(streamId || '').trim();
+    if (!id) return false;
+    try {
+      const cookie = await this._login();
+      const url = `${this.baseUrl}/api/chat/cancel?stream_id=${encodeURIComponent(id)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Cookie: cookie, Accept: 'application/json' }
+      });
+      if (this._streamId === id) this._streamId = null;
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async setSessionToolsets(sessionId, toolsets) {
+    const id = String(sessionId || '').trim();
+    if (!id || !Array.isArray(toolsets) || !toolsets.length) return false;
+    try {
+      await this.requestJson('/api/session/toolsets', {
+        method: 'POST',
+        body: { session_id: id, toolsets }
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   resetSession() { this._sessionId = null; this._streamId = null; }

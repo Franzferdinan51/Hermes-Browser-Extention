@@ -244,8 +244,24 @@ child.stderr.on('data', (d) => { bridgeLog += d; });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const authHeaders = { Authorization: `Bearer ${BRIDGE_TOKEN}` };
 
+async function waitForBridge() {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      // Probe the auth boundary without credentials so readiness does not
+      // block on the fake Hermes /healthz request used by this test.
+      const response = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/healthz`);
+      if (response.status === 401 || response.status === 403 || response.status === 200) return;
+    } catch {
+      // The child is still loading its modules; retry until the bounded deadline.
+    }
+    await wait(50);
+  }
+  throw new Error(`bridge did not become ready on port ${BRIDGE_PORT}`);
+}
+
 async function main() {
-  await wait(700);
+  await waitForBridge();
 
   const companionActions = [];
   const companion = new WebSocket(`ws://127.0.0.1:${BRIDGE_PORT}/ws?token=${encodeURIComponent(BRIDGE_TOKEN)}`, {

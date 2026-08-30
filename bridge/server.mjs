@@ -50,23 +50,12 @@ function loadEnvFile(file) {
 
 const HERMES_HOME = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
 loadEnvFile(path.join(HERMES_HOME, '.hermes-webui.env'));
-// Also pick up API_SERVER_KEY from the main Hermes .env so the bridge can
-// authenticate against the Hermes API server (port 8642 by default).
-loadEnvFile(path.join(HERMES_HOME, '.env'));
 
 const PORT = Number(process.env.PORT || 8965);
 const cfg = {
-  // Bridge talks to the Hermes API server, not the WebUI dashboard. The API
-  // server is started by `hermes gateway` with API_SERVER_ENABLED=true and
-  // listens on API_SERVER_PORT (default 8642). The old HERMES_WEBUI_PORT
-  // (dashboard on 8787) is kept as a fallback for backwards compatibility.
-  hermesUrl: process.env.HERMES_URL || process.env.HERMES_API_URL
-    || `http://127.0.0.1:${process.env.API_SERVER_PORT || 8642}`,
-  apiKey: process.env.HERMES_API_KEY || process.env.API_SERVER_KEY || '',
-  // Legacy fields — accepted but unused now that the API server uses Bearer
-  // auth instead of the dashboard's session-token / basic-auth scheme.
+  hermesUrl: process.env.HERMES_URL || `http://127.0.0.1:${process.env.HERMES_WEBUI_PORT || 8787}`,
   password: process.env.HERMES_PASSWORD || process.env.HERMES_WEBUI_PASSWORD || '',
-  model: process.env.MODEL || 'ornith-1.5-35b-a3b',
+  model: process.env.MODEL || 'qwen3.5-9b',
   modelProvider: process.env.MODEL_PROVIDER || 'lmstudio',
   workspace: process.env.WORKSPACE || '',
   authToken: process.env.BRIDGE_AUTH_TOKEN || ''
@@ -74,64 +63,11 @@ const cfg = {
 
 const hermes = new HermesClient({
   baseUrl: cfg.hermesUrl,
-  apiKey: cfg.apiKey,
   password: cfg.password,
   model: cfg.model,
   modelProvider: cfg.modelProvider,
   workspace: cfg.workspace
 });
-
-// Cached provider credentials for model catalog discovery
-let _credentialsCache = { at: 0, value: null };
-const CREDS_CACHE_MS = 300_000; // 5 min
-
-async function getProviderCredentials() {
-  const now = Date.now();
-  if (_credentialsCache.value && now - _credentialsCache.at < CREDS_CACHE_MS) {
-    return _credentialsCache.value;
-  }
-  // The API server (port 8642) does not expose /api/credentials/pool — that's
-  // a dashboard-only endpoint. Build a minimal credential map directly from
-  // environment variables instead so the model catalog stays discoverable.
-  const creds = {};
-
-  // LM Studio — hardcoded default URL; the API key is whatever LM Studio is
-  // configured to require (often "lm-studio" or empty). Users running it on
-  // a non-default host override via LM_BASE_URL.
-  const lmBase = process.env.LM_BASE_URL || 'http://127.0.0.1:1234';
-  creds.lmstudio = {
-    baseUrl: lmBase.replace(/\/+$/, ''),
-    apiKey: process.env.LM_API_KEY || 'lm-studio'
-  };
-
-  // MiniMax — pull from .env or process env. Bridge .hermes-webui.env
-  // already loads ~/.hermes/.hermes-webui.env via loadEnvFile, but the main
-  // Hermes .env sets MINIMAX_API_KEY and we read it again here for safety.
-  const minimaxKey = process.env.MINIMAX_API_KEY || process.env.HERMES_MINIMAX_API_KEY || '';
-  if (minimaxKey) {
-    creds.minimax = {
-      baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.io/v1',
-      apiKey: minimaxKey
-    };
-  }
-
-  _credentialsCache = { at: now, value: creds };
-  return creds;
-}
-
-async function fetchModelCatalog(url, headers = {}) {
-  try {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (Array.isArray(data?.data)) return data.data;
-    if (Array.isArray(data)) return data;
-    return [];
-  } catch {
-    return [];
-  }
-}
-
 const hermesSessions = new Map();
 const MAX_THREAD_STATE = 32;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -1285,83 +1221,77 @@ async function modelInventory({ force = false } = {}) {
   if (!force && modelInventoryCache.value && now - modelInventoryCache.at < MODEL_CACHE_MS) {
     return modelInventoryCache.value;
   }
+  let providerData = null;
+  try { providerData = await hermes.requestJson('/api/providers'); } catch {}
+  let catalogData = {};
+  try { catalogData = await hermes.requestJson('/api/models'); } catch {}
+  if (!providerData) providerData = catalogData;
 
   const out = [];
   const seen = new Set();
+  const providerMeta = new Map();
 
-  // 1. Hermes analytics — marks models that have been used (configured=true)
-  let analyticsByProvider = new Map();
-  try {
-    const analyticsData = await hermes.requestJson('/api/analytics/models');
-    if (Array.isArray(analyticsData?.models)) {
-      for (const m of analyticsData.models) {
-        const p = m.provider || '';
-        if (!analyticsByProvider.has(p)) analyticsByProvider.set(p, new Set());
-        analyticsByProvider.get(p).add(m.model);
-      }
-    }
-  } catch {}
-
-  // 2. LM Studio — query directly for all loaded models
-  try {
-    const creds = await getProviderCredentials();
-    if (creds.lmstudio) {
-      const models = await fetchModelCatalog(
-        `${creds.lmstudio.baseUrl}/v1/models`,
-        { Authorization: `Bearer ${creds.lmstudio.apiKey}` }
-      );
-      const isConfigured = (id) =>
-        (analyticsByProvider.get('lmstudio') || new Set()).has(id);
-      for (const m of models) {
-        const id = m.id || m.model || m;
-        if (!id || seen.has(`lmstudio/${id}`)) continue;
-        seen.add(`lmstudio/${id}`);
-        out.push({
-          id,
-          provider: 'lmstudio',
-          label: id,
-          configured: isConfigured(id),
-          source: 'lmstudio'
+  if (Array.isArray(providerData?.providers)) {
+    for (const group of providerData.providers) {
+      const configured = group.has_key === true && !group.auth_error;
+      providerMeta.set(String(group.id || ''), {
+        label: group.display_name || group.id,
+        configured
+      });
+      const blocked = Boolean(group.auth_error) && group.has_key !== true;
+      const items = groupModelBuckets(group);
+      if (blocked && !items.length) continue;
+      for (const item of items) {
+        pushInventoryModel(out, seen, item, group.id, group.display_name || group.id, {
+          configured,
+          source: 'provider'
         });
       }
     }
-  } catch {}
+  }
 
-  // 3. MiniMax — query the MiniMax model catalog
-  try {
-    const creds = await getProviderCredentials();
-    if (creds.minimax?.apiKey) {
-      const models = await fetchModelCatalog(
-        `${creds.minimax.baseUrl}/models`,
-        { Authorization: `Bearer ${creds.minimax.apiKey}` }
-      );
-      const isConfigured = (id) =>
-        (analyticsByProvider.get('minimax') || new Set()).has(id);
-      for (const m of models) {
-        const id = m.id || m.model || m;
-        if (!id || seen.has(`minimax/${id}`)) continue;
-        seen.add(`minimax/${id}`);
-        out.push({
-          id,
-          provider: 'minimax',
-          label: id,
-          configured: isConfigured(id),
-          source: 'minimax'
-        });
-      }
+  for (const group of catalogData?.groups || providerData?.groups || []) {
+    const provider = group.provider_id || group.id || '';
+    const meta = providerMeta.get(String(provider));
+    for (const item of groupModelBuckets(group)) {
+      pushInventoryModel(out, seen, item, provider, group.provider || group.display_name || meta?.label || provider, {
+        configured: meta?.configured,
+        source: 'catalog'
+      });
     }
-  } catch {}
+  }
 
-  // Sort: configured first, then by provider label, then by model label
+  if (Array.isArray(catalogData?.models)) {
+    for (const item of catalogData.models) {
+      pushInventoryModel(out, seen, item, catalogData.active_provider || cfg.modelProvider, catalogData.active_provider, {
+        source: 'catalog'
+      });
+    }
+  }
+
+  const fallbackModel = catalogData?.default_model || cfg.model;
+  const fallbackProvider = catalogData?.active_provider || providerData?.active_provider || cfg.modelProvider;
+  if (fallbackModel) {
+    pushInventoryModel(out, seen, fallbackModel, fallbackProvider, providerMeta.get(String(fallbackProvider))?.label || fallbackProvider, {
+      configured: true,
+      source: 'default'
+    });
+  }
+
   out.sort((a, b) => {
     const configuredDelta = Number(Boolean(b.configured)) - Number(Boolean(a.configured));
     if (configuredDelta) return configuredDelta;
-    return String(a.provider || '').localeCompare(String(b.provider || '')) ||
-      String(a.label || '').localeCompare(String(b.label || ''));
+    return String(a.providerLabel).localeCompare(String(b.providerLabel)) || String(a.label).localeCompare(String(b.label));
   });
 
-  modelInventoryCache = { at: now, value: out };
-  return out;
+  const result = {
+    object: 'list',
+    active_provider: catalogData?.active_provider || providerData?.active_provider,
+    default_model: catalogData?.default_model || providerData?.default_model,
+    data: out
+  };
+  modelInventoryCache = { at: Date.now(), value: result };
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,13 +1321,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && route === '/v1/models') {
     try {
       const force = /(^|[?&])refresh=1\b/.test(String(req.url || ''));
-      const models = await modelInventory({ force });
-      json(res, 200, {
-        object: 'list',
-        active_provider: cfg.modelProvider,
-        default_model: cfg.model,
-        data: models
-      });
+      json(res, 200, await modelInventory({ force }));
     } catch (e) {
       json(res, 200, { object: 'list', error: e.message, data: [] });
     }
@@ -1422,10 +1346,7 @@ const server = http.createServer(async (req, res) => {
     let hermesOk = false;
     let hermesInfo = '';
     try {
-      // The Hermes API server exposes /v1/models as a cheap reachability probe.
-      // It accepts the same Bearer auth as the rest of the API surface and
-      // returns a stable response shape even when no models are configured.
-      await hermes.requestJson('/v1/models');
+      await hermes.requestJson('/api/models');
       hermesOk = true;
       hermesInfo = 'authenticated';
     } catch (e) {

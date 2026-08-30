@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Hermes Browser mark">
+  <!-- Monochrome mask: render the H mark in white-on-transparent. Theming is
+       handled by the consumer via `background-color: var(--hermes-ink)` and
+       `mask-image: url(...)` so the mark picks up the active theme's ink
+       color instead of being a hard-coded blue square. -->
+  <rect x="36" y="36" width="184" height="184" fill="none" stroke="#fff" stroke-width="6"/>
+  <text x="128" y="156" fill="#fff" text-anchor="middle" font-size="116" font-family="Georgia,serif" font-weight="400">H</text>
+</svg>

@@ -1,0 +1,108 @@
+@font-face {
+  font-family: "Collapse";
+  src: url("../assets/fonts/Collapse-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Collapse";
+  src: url("../assets/fonts/Collapse-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "HermesDisplay";
+  src: url("../assets/fonts/Sigurd-Variable.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "HermesMono";
+  src: url("../assets/fonts/CourierPrime-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --hermes-blue: #0000f2;
+  --hermes-blue-deep: #03038f;
+  --hermes-paper: #fbfcff;
+  --hermes-white: #f8faff;
+  --hermes-ink: #0000f2;
+  --hermes-blue-rgb: 0, 0, 242;
+  --hermes-paper-rgb: 251, 252, 255;
+  --hermes-white-rgb: 248, 250, 255;
+  --hermes-fg-rgb: var(--hermes-white-rgb);
+  --hermes-shadow-rgb: 0, 0, 80;
+  --hermes-line: rgba(var(--hermes-blue-rgb), 0.24);
+  --hermes-line-strong: rgba(var(--hermes-blue-rgb), 0.76);
+  --hermes-muted: rgba(var(--hermes-blue-rgb), 0.64);
+  --hermes-blue-muted: rgba(var(--hermes-white-rgb), 0.72);
+  --hermes-blue-line: rgba(var(--hermes-white-rgb), 0.42);
+  --hermes-success: #0a8f54;
+  --hermes-warning: #a96800;
+  --hermes-danger: #d51f4e;
+  --hermes-font-ui: "Collapse", "Segoe UI", system-ui, sans-serif;
+  --hermes-font-display: "HermesDisplay", "Collapse", Georgia, serif;
+  --hermes-font-mono: "HermesMono", "Courier Prime", "Cascadia Code", monospace;
+  --fulltab-left-rail: 280px;
+  --fulltab-inspector: 280px;
+  --fulltab-topbar: 64px;
+  font-family: var(--hermes-font-ui);
+  font-synthesis: none;
+}
+
+html[data-hermes-theme^="custom:"] {
+  color-scheme: light;
+}
+
+html[data-hermes-theme^="custom:"][data-hermes-mode="dark"] {
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+button,
+input,
+textarea,
+select { font: inherit; }
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

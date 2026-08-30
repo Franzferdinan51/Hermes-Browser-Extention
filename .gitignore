@@ -1,21 +1,50 @@
-# deps
+# Dependencies
 node_modules/
-npm-debug.log*
 
-# secrets / env
+# Build outputs and release artifacts
+dist/
+artifacts/
+build-info.json
+extension/build-info.json
+
+# Release notes and launch ads belong on GitHub Releases, not source control
+RELEASE-v*.md
+assets/readme/*-ad*
+
+# Local QA/temp work
+tmp/
+.hermes/
+.gitnexus/
+.claude/
+
+# GitHub Actions are intentionally disabled for this repo while hosted runners are unavailable.
+# Keep local verification as the release gate instead of pushing false-red workflows.
+.github/workflows/
+
+# Private backups and local secrets
+backups/
 .env
 .env.*
-!.env.example
+*.bak
 
-# editor / os
-.DS_Store
-*.swp
-
-# test artifacts (but keep the test source)
-test/node_modules/
-
-# runtime logs
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# hermes runtime cache (created by this repo when run locally)
-.hermes/
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+docs/
+.omx/
+CLAUDE.md
+AGENTS.md

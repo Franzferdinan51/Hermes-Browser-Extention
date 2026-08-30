@@ -1,59 +1,109 @@
 {
   "manifest_version": 3,
-  "name": "Hermes Agent — Browser Companion",
-  "short_name": "Hermes",
-  "version": "0.3.6",
-  "description": "Connect Hermes to the browser over AG-UI with live toolset/skill discovery, page context, rich streaming responses, and correlated DOM actions.",
+  "default_locale": "en",
+  "name": "__MSG_extensionName__",
+  "short_name": "__MSG_extensionShortName__",
+  "version": "0.3.1",
+  "description": "__MSG_extensionDescription__",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
   "permissions": [
+    "activeTab",
+    "alarms",
+    "contextMenus",
+    "debugger",
+    "downloads",
+    "offscreen",
+    "scripting",
     "sidePanel",
     "storage",
-    "activeTab",
-    "scripting",
-    "tabs",
-    "tabGroups",
-    "bookmarks",
-    "cookies",
-    "history",
-    "downloads",
-    "sessions",
-    "topSites",
-    "clipboardWrite"
+    "tabs"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1:8965/*",
-    "http://localhost:8965/*",
-    "ws://127.0.0.1:8965/*",
-    "ws://localhost:8965/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://*/*",
+    "https://*/*",
+    "file:///*"
   ],
+  "action": {
+      "default_title": "__MSG_openExtension__",
+      "default_icon": {
+        "16": "assets/icons/icon-16.png",
+        "32": "assets/icons/icon-32.png",
+        "48": "assets/icons/icon-48.png",
+        "128": "assets/icons/icon-128.png"
+      }
+    },
   "background": {
-    "service_worker": "lib/background.js",
+    "service_worker": "background.js",
     "type": "module"
   },
-  "action": {
-    "default_title": "Open Hermes side panel"
-  },
-  "options_page": "ui/options.html",
   "side_panel": {
-    "default_path": "ui/panel.html"
+    "default_path": "sidepanel.html"
+  },
+  "sidebar_action": {
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    },
+    "default_title": "__MSG_extensionName__",
+    "default_panel": "sidepanel.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+H",
+        "mac": "Alt+H"
+      },
+      "description": "__MSG_openExtension__"
+    },
+    "_execute_sidebar_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+H",
+        "mac": "Command+Shift+H"
+      },
+      "description": "__MSG_openSidebar__"
+    }
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": [
-        "lib/page-reader.js",
-        "lib/page-actor.js",
-        "lib/content.js"
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
       ],
-      "run_at": "document_idle",
-      "all_frames": false,
-      "match_about_blank": true
+      "js": [
+        "lib/browser-api-global.js",
+        "content-extractor.js",
+        "content.js",
+        "lib/i18n-content.js",
+        "content-inline-helper.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/img/hermes-browser-extension-icon-box-white.png",
+        "assets/img/hermes-browser-extension-icon-ink.png"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src http: https: wss: ws://127.0.0.1:* ws://localhost:*;"
   }
 }

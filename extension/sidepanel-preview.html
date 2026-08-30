@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hermes Browser Preview</title>
+    <link rel="icon" href="assets/icons/icon-32.png" />
+    <link rel="stylesheet" href="sidepanel.css" />
+    <style>body{max-width:420px;margin:0 auto;box-shadow:0 0 0 1px #0000f2;}</style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead" aria-label="Hermes Browser header">
+        <span>NOUS</span>
+        <span class="masthead-center">HERMES<br />AGENT</span>
+        <button class="settings-button icon-button" type="button" title="Settings" aria-label="Open settings">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16">
+            <path d="M12 8.3a3.7 3.7 0 1 1 0 7.4 3.7 3.7 0 0 1 0-7.4Zm7.3 3.7c0-.5-.1-1-.2-1.5l2-1.5-2-3.5-2.4 1a8.5 8.5 0 0 0-2.6-1.5L13.8 2H10l-.4 3a8.5 8.5 0 0 0-2.6 1.5l-2.4-1-2 3.5 2 1.5a8.5 8.5 0 0 0 0 3l-2 1.5 2 3.5 2.4-1a8.5 8.5 0 0 0 2.6 1.5l.4 3h3.8l.4-3a8.5 8.5 0 0 0 2.6-1.5l2.4 1 2-3.5-2-1.5c.1-.5.2-1 .2-1.5Z" fill="currentColor"/>
+          </svg>
+        </button>
+      </header>
+      <section class="hero-card" aria-label="Hermes Browser intro">
+        <div class="hero-copy">
+          <p class="eyebrow">LOCAL SIDECAR / CHROME PANEL</p>
+          <h1>HERMES<br />BROWSER</h1>
+          <p class="intro">Ask about any page. Hermes sees the active tab, selected text, page context, and open tabs.</p>
+        </div>
+        <img class="hero-badge" src="assets/img/hermes-badge.webp" alt="Hermes Agent badge" />
+      </section>
+      <section class="status-card" aria-live="polite">
+        <div class="status-label"><span class="status-dot ok"></span><span>ACTIVE TAB</span></div>
+        <div class="status-copy"><strong>Hermes Agent | Nous Research</strong><span>https://hermes-agent.nousresearch.com/</span></div>
+      </section>
+      <section class="messages" aria-live="polite">
+        <article class="message user"><div class="message-role">user</div><div class="message-content">What am I looking at?</div></article>
+        <article class="message assistant">
+          <div class="message-role">Hermes</div>
+          <div class="message-content">You are on the Hermes Agent homepage. The page is presenting Hermes as an open-source agent that lives across platforms, remembers context, schedules work, browses the web, and runs in isolated backends.</div>
+          <div class="message-tool-activity">
+            <div class="tool-activity tool-kind-file" role="status" aria-live="polite">
+              <div class="tool-activity-head">
+                <span class="tool-activity-glyph tool-kind-file" aria-hidden="true"></span>
+                <span class="tool-activity-label">Reading file</span>
+                <span class="tool-activity-name">read_file</span>
+              </div>
+              <div class="tool-activity-preview">extension/sidepanel.js · sanitized preview</div>
+              <div class="tool-activity-meter" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+            </div>
+          </div>
+        </article>
+      </section>
+      <form class="composer">
+        <label class="composer-label" for="promptInput">ASK HERMES</label>
+        <div class="composer-input-wrap">
+          <textarea id="promptInput" rows="3" placeholder="Ask Hermes about this page..."></textarea>
+          <button class="attach-menu-button composer-plus" type="button" aria-label="Attach context">+</button>
+          <button class="composer-command" type="button" aria-label="Open quick commands"><span aria-hidden="true">/</span><strong>commands</strong></button>
+        </div>
+        <div class="composer-actions"><button class="secondary" type="button">Refresh</button><button type="button" id="sendButton">Ask Hermes</button></div>
+      </form>
+    </main>
+  </body>
+</html>
