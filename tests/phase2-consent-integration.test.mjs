@@ -97,6 +97,18 @@ test('consent decisions are stored separately and synchronized across both surfa
   }
 });
 
+test('explicit tab-scope actions explain and resolve missing remote-context consent', () => {
+  const pinning = sidepanel.match(/async function pinContextTab\([\s\S]*?\n\}/)?.[0] || '';
+  const unlocking = sidepanel.match(/async function unlockContextScope\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(pinning, /requireContextScopeConsent/);
+  assert.match(unlocking, /requireContextScopeConsent/);
+  assert.match(sidepanel, /CONTEXT_SCOPE_MODES\.FOLLOW_ACTIVE/);
+  assert.match(sidepanel, /openSettingsDialog\(\)/);
+  assert.match(sidepanel, /scrollIntoView\(/);
+  assert.match(sidepanel, /Share page context with this connection/);
+  assert.match(sidepanel, /Page context sharing required/);
+});
+
 test('service-worker background and new-session inline drafts re-read the dedicated consent ledger immediately before chat submit', () => {
   assert.match(background, /inline-draft-consent\.mjs/);
   assert.match(background, /CONTEXT_CONSENT_STORAGE_KEY/);

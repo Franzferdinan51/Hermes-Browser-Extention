@@ -2333,9 +2333,28 @@ async function applyContextScope(nextScope, { ensureSession = false } = {}) {
   await refreshContext();
 }
 
+function requireContextScopeConsent(requestedScope) {
+  const gate = effectiveContextGate(requestedScope);
+  if (gate.allowed) return true;
+
+  openSettingsDialog();
+  els.browserContextConsentControl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  els.browserContextConsentInput?.focus({ preventScroll: true });
+  showOperationToast({
+    kind: 'warn',
+    title: 'Page context sharing required',
+    detail: gate.reason === 'principal-unavailable'
+      ? 'Reconnect or test this connection before sharing page context.'
+      : 'Approve “Share page context with this connection” in Settings to pin or follow this tab.',
+  });
+  return false;
+}
+
 async function pinContextTab(tab) {
   if (!tab?.id) return;
-  await applyContextScope(contextScopeFromTab(tab, contextScope), { ensureSession: true });
+  const nextScope = contextScopeFromTab(tab, contextScope);
+  if (!requireContextScopeConsent(nextScope)) return;
+  await applyContextScope(nextScope, { ensureSession: true });
 }
 
 async function pinContextTabById(tabId) {
@@ -2355,7 +2374,7 @@ async function pinContextTabById(tabId) {
 }
 
 async function unlockContextScope() {
-  await applyContextScope({
+  const nextScope = {
     ...contextScope,
     mode: CONTEXT_SCOPE_MODES.FOLLOW_ACTIVE,
     pinnedTabId: null,
@@ -2363,7 +2382,9 @@ async function unlockContextScope() {
     pinnedTitle: '',
     pinnedUrl: '',
     selectedTabIds: [],
-  });
+  };
+  if (!requireContextScopeConsent(nextScope)) return;
+  await applyContextScope(nextScope);
 }
 
 function setGatewayCapabilities(caps) {
